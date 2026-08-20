@@ -1,0 +1,81 @@
+import os
+import unittest
+
+from nanobot.providers import HumanMessage, OpenAICompatProvider, SystemMessage
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+RUN_DEEPSEEK_LIVE_TESTS = os.getenv("RUN_DEEPSEEK_LIVE_TESTS") == "1"
+
+WEATHER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+        },
+    },
+}
+
+
+@unittest.skipUnless(
+    DEEPSEEK_API_KEY and RUN_DEEPSEEK_LIVE_TESTS,
+    "set DEEPSEEK_API_KEY and RUN_DEEPSEEK_LIVE_TESTS=1 to run live tests",
+)
+class DeepSeekLiveTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.provider = OpenAICompatProvider(
+            api_key=DEEPSEEK_API_KEY or "",
+            api_base=DEEPSEEK_API_BASE,
+            default_model=DEEPSEEK_MODEL,
+        )
+
+    async def test_deepseek_complete_chat(self) -> None:
+        response = await self.provider.complete(
+            (
+                SystemMessage(content="Reply with one short greeting."),
+                HumanMessage(content="Say hello."),
+            ),
+            max_tokens=16,
+            temperature=0,
+        )
+
+        self.assertTrue(response.content)
+
+    async def test_deepseek_stream_chat(self) -> None:
+        deltas: list[str] = []
+
+        async def on_delta(delta: str) -> None:
+            deltas.append(delta)
+
+        response = await self.provider.stream(
+            (HumanMessage(content="Reply with exactly one short greeting."),),
+            max_tokens=16,
+            temperature=0,
+            on_delta=on_delta,
+        )
+
+        self.assertTrue(response.content)
+        self.assertTrue(deltas)
+        self.assertEqual("".join(deltas), response.content)
+
+    async def test_deepseek_requests_weather_tool_call(self) -> None:
+        response = await self.provider.complete(
+            (
+                SystemMessage(
+                    content="You must call get_weather to answer weather questions."
+                ),
+                HumanMessage(content="What is the weather in Beijing?"),
+            ),
+            tools=(WEATHER_TOOL,),
+            max_tokens=64,
+            temperature=0,
+        )
+
+        self.assertTrue(response.tool_calls)
+        self.assertEqual(response.tool_calls[0].name, "get_weather")
+        self.assertEqual(response.tool_calls[0].arguments.get("city"), "Beijing")

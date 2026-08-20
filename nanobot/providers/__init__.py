@@ -1,3 +1,4 @@
+from .anthropic_compat_provider import AnthropicCompatProvider
 from .base import (
     LLMProvider,
     LLMResponse,
@@ -14,15 +15,18 @@ from .messages import (
     ToolCallRequest,
     ToolMessage,
 )
+from .openai_compat_provider import OpenAICompatProvider
 
 __all__ = [
     "AIMessage",
+    "AnthropicCompatProvider",
     "BaseMessage",
     "HumanMessage",
     "LLMProvider",
     "LLMResponse",
     "Message",
     "MessageRole",
+    "OpenAICompatProvider",
     "ProviderError",
     "SystemMessage",
     "TokenUsage",
