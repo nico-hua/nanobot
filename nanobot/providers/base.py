@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
 
+from ..tools import Tool
 from .messages import BaseMessage, ToolCallRequest
 
 
@@ -40,7 +40,7 @@ class LLMProvider(ABC):
     async def complete(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResponse:
@@ -52,7 +52,7 @@ class LLMProvider(ABC):
     async def stream(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,

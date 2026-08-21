@@ -7,6 +7,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
+from ..tools import Tool
 from .base import LLMProvider, LLMResponse, ProviderError, TokenUsage
 from .messages import (
     AIMessage,
@@ -45,7 +46,7 @@ class AnthropicCompatProvider(LLMProvider):
     async def complete(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResponse:
@@ -62,7 +63,7 @@ class AnthropicCompatProvider(LLMProvider):
     async def stream(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -84,7 +85,7 @@ class AnthropicCompatProvider(LLMProvider):
     def _build_request(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None,
+        tools: Sequence[Tool] | None,
         max_tokens: int | None,
         temperature: float | None,
     ) -> dict[str, Any]:
@@ -106,7 +107,7 @@ class AnthropicCompatProvider(LLMProvider):
         if system_parts:
             request["system"] = "\n\n".join(system_parts)
         if tools is not None:
-            request["tools"] = [dict(tool) for tool in tools]
+            request["tools"] = [tool.to_anthropic_tool() for tool in tools]
         if temperature is not None:
             request["temperature"] = temperature
         if self.default_thinking is not None:

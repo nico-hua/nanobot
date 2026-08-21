@@ -8,6 +8,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from ..tools import Tool
 from .base import LLMProvider, LLMResponse, ProviderError, TokenUsage
 from .messages import AIMessage, BaseMessage, ToolCallRequest, ToolMessage
 
@@ -33,7 +34,7 @@ class OpenAICompatProvider(LLMProvider):
     async def complete(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResponse:
@@ -50,7 +51,7 @@ class OpenAICompatProvider(LLMProvider):
     async def stream(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -104,7 +105,7 @@ class OpenAICompatProvider(LLMProvider):
     def _build_request(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None,
+        tools: Sequence[Tool] | None,
         max_tokens: int | None,
         temperature: float | None,
     ) -> dict[str, Any]:
@@ -113,7 +114,7 @@ class OpenAICompatProvider(LLMProvider):
             "messages": [_message_to_dict(message) for message in messages],
         }
         if tools is not None:
-            request["tools"] = [dict(tool) for tool in tools]
+            request["tools"] = [tool.to_openai_tool() for tool in tools]
         if max_tokens is not None:
             request["max_tokens"] = max_tokens
         if temperature is not None:

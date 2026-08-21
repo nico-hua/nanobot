@@ -1,6 +1,5 @@
 import unittest
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Any
+from collections.abc import Awaitable, Callable, Sequence
 
 from nanobot.providers import (
     AIMessage,
@@ -15,13 +14,15 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
+from nanobot.tools import Tool
+from test.tools.fakes import WeatherTool
 
 
 class FakeProvider(LLMProvider):
     def __init__(self) -> None:
         self.received_messages: tuple[BaseMessage, ...] | None = None
         self.received_options: tuple[
-            Sequence[Mapping[str, Any]] | None,
+            Sequence[Tool] | None,
             int | None,
             float | None,
         ] | None = None
@@ -29,7 +30,7 @@ class FakeProvider(LLMProvider):
     async def complete(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
     ) -> LLMResponse:
@@ -40,7 +41,7 @@ class FakeProvider(LLMProvider):
     async def stream(
         self,
         messages: Sequence[BaseMessage],
-        tools: Sequence[Mapping[str, Any]] | None = None,
+        tools: Sequence[Tool] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -147,7 +148,7 @@ class LLMProviderTest(unittest.IsolatedAsyncioTestCase):
     async def test_complete_accepts_tools_and_generation_options(self) -> None:
         provider = FakeProvider()
         messages = (HumanMessage(content="Search for Python"),)
-        tools = ({"name": "search", "description": "Search the web"},)
+        tools = (WeatherTool(),)
 
         response = await provider.complete(
             messages,
@@ -163,7 +164,7 @@ class LLMProviderTest(unittest.IsolatedAsyncioTestCase):
     async def test_stream_emits_deltas_and_returns_final_response(self) -> None:
         provider = FakeProvider()
         messages = (HumanMessage(content="Say hello"),)
-        tools = ({"name": "search"},)
+        tools = (WeatherTool(),)
         deltas: list[str] = []
 
         async def on_delta(delta: str) -> None:

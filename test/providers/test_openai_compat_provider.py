@@ -15,6 +15,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
+from test.tools.fakes import WeatherTool
 
 
 class FakeStream:
@@ -85,12 +86,7 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
             name="get_weather",
             arguments={"city": "Beijing"},
         )
-        tools = (
-            {
-                "type": "function",
-                "function": {"name": "get_weather"},
-            },
-        )
+        tools = (WeatherTool(),)
 
         result = await provider.complete(
             messages=(
@@ -106,7 +102,10 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
 
         request = client.completions.requests[0]
         self.assertEqual(request["model"], "test-model")
-        self.assertEqual(request["tools"], list(tools))
+        self.assertEqual(
+            request["tools"],
+            [tool.to_openai_tool() for tool in tools],
+        )
         self.assertEqual(request["max_tokens"], 32)
         self.assertEqual(request["temperature"], 0.1)
         self.assertEqual(request["messages"][0], {"role": "system", "content": "You are helpful."})
@@ -209,15 +208,21 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
         client = FakeClient(completion_response(), chunks)
         provider = OpenAICompatProvider("test-key", "https://example.test/v1", "test-model", client=client)
         deltas: list[str] = []
+        tools = (WeatherTool(),)
 
         async def on_delta(delta: str) -> None:
             deltas.append(delta)
 
         result = await provider.stream(
             (HumanMessage(content="Check the weather"),),
+            tools=tools,
             on_delta=on_delta,
         )
 
+        self.assertEqual(
+            client.completions.requests[0]["tools"],
+            [tool.to_openai_tool() for tool in tools],
+        )
         self.assertEqual(deltas, ["Hel", "lo"])
         self.assertEqual(result.content, "Hello")
         self.assertEqual(result.finish_reason, "tool_calls")

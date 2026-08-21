@@ -16,6 +16,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
+from test.tools.fakes import WeatherTool
 
 
 class FakeTextStream:
@@ -96,13 +97,7 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
             name="get_weather",
             arguments={"city": "Beijing"},
         )
-        tools = (
-            {
-                "name": "get_weather",
-                "description": "Get weather",
-                "input_schema": {"type": "object"},
-            },
-        )
+        tools = (WeatherTool(),)
 
         result = await provider.complete(
             (
@@ -119,7 +114,10 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
         request = client.messages.create_requests[0]
         self.assertEqual(request["model"], "test-model")
         self.assertEqual(request["system"], "You are helpful.")
-        self.assertEqual(request["tools"], list(tools))
+        self.assertEqual(
+            request["tools"],
+            [tool.to_anthropic_tool() for tool in tools],
+        )
         self.assertEqual(request["max_tokens"], 32)
         self.assertEqual(request["temperature"], 0.1)
         self.assertEqual(request["messages"][0], {"role": "user", "content": "What is the weather?"})
@@ -155,15 +153,21 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
         client = FakeClient(response, ("Hel", "lo"))
         provider = AnthropicCompatProvider("test-key", "https://example.test/anthropic", "test-model", client=client)
         deltas: list[str] = []
+        tools = (WeatherTool(),)
 
         async def on_delta(delta: str) -> None:
             deltas.append(delta)
 
         result = await provider.stream(
             (HumanMessage(content="Say hello"),),
+            tools=tools,
             on_delta=on_delta,
         )
 
+        self.assertEqual(
+            client.messages.stream_requests[0]["tools"],
+            [tool.to_anthropic_tool() for tool in tools],
+        )
         self.assertEqual(deltas, ["Hel", "lo"])
         self.assertEqual(result.content, "Hello")
         self.assertEqual(client.messages.stream_requests[0]["max_tokens"], 1024)
