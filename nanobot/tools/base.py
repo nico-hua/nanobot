@@ -5,7 +5,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Self
+
+from .context import ToolContext
 
 ToolParameterType = Literal["string", "integer", "number", "boolean"]
 _TOOL_PARAMETER_TYPES = frozenset({"string", "integer", "number", "boolean"})
@@ -92,6 +94,22 @@ class Tool(ABC):
         """Execute the tool with the arguments requested by the model."""
 
         raise NotImplementedError
+
+    @classmethod
+    def enabled(cls, context: ToolContext) -> bool:
+        """Return whether the context has the dependencies required by this tool."""
+
+        return True
+
+    @classmethod
+    def create(cls, context: ToolContext) -> Self:
+        """Create a tool instance from shared dependencies.
+
+        Tools without dependencies can use this default implementation. Tools
+        with dependencies should override it together with ``enabled``.
+        """
+
+        return cls()
 
     def to_openai_tool(self) -> dict[str, Any]:
         """Return this tool in OpenAI function-calling format."""

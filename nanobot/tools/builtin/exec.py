@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from ..base import Tool, ToolParameter, ToolResult
+from ..context import ToolContext
 from ._workspace import resolve_workspace, resolve_workspace_path, tool_error
 
 
@@ -44,6 +45,16 @@ class ExecTool(Tool):
                 ),
             ),
         )
+
+    @classmethod
+    def enabled(cls, context: ToolContext) -> bool:
+        return context.workspace is not None
+
+    @classmethod
+    def create(cls, context: ToolContext) -> ExecTool:
+        if context.workspace is None:
+            raise ValueError("ExecTool requires a workspace")
+        return cls(context.workspace)
 
     async def execute(
         self,

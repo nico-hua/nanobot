@@ -47,13 +47,17 @@
 - [x] 实现 workspace 范围内的 `EditFileTool`，支持恰好一次的 UTF-8 文本替换。
 - [x] 实现 workspace 范围内的 `ListDirTool`，支持稳定排序、递归和返回条目限制。
 - [x] 实现 `ExecTool`，支持一次性 shell 命令、超时、stdout/stderr、退出码和输出截断。
+- [x] 设计 `ToolContext`，集中提供工具创建所需的共享依赖；当前包含可选 `workspace`。
+- [x] 为 `Tool` 增加 `enabled(context)` 和 `create(context)` 工厂协议，并让 workspace builtin 工具按 context 决定是否启用和创建。
+- [x] 实现 `ToolRegistry`，支持稳定注册顺序、查找、移除、统一 schema、参数校验和异步执行。
+- [x] 实现 `ToolLoader`，自动发现并稳定加载 builtin 工具，通过 `ToolContext` 创建后注册到 `ToolRegistry`。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 73 tests in 3.185s
+Ran 87 tests in 2.958s
 OK (skipped=6)
 ```
 
@@ -98,13 +102,19 @@ OK (skipped=6)
 
 `ToolParameter` 当前仅支持 string、integer、number 和 boolean。数组、嵌套对象、枚举、默认值等复杂 JSON Schema 能力仍待实际需求出现后扩展。`ToolCallRequest` 已经作为模型输出的统一格式保留。
 
-### 2. 工具注册与执行边界尚未建立
+### 2. Agent 工具调用流程尚未建立
 
-目前已经有工具基类和统一执行结果，但还没有：
+目前已有 `ToolContext`、`ToolRegistry` 和 `ToolLoader`：
 
-- 工具注册表或 `ToolRegistry`；
-- 工具参数 JSON Schema 的运行时校验；
-- AgentRunner 执行工具并将结果转换为 `ToolMessage` 的流程。
+- `ToolRegistry` 按名称管理工具，以稳定顺序提供统一 schema，并根据 `ToolParameter` 校验标量参数后执行工具；
+- `ToolLoader` 稳定发现 builtin 工具，跳过私有模块、抽象类和重复类，并通过 `enabled(context)` / `create(context)` 完成实例化；
+- `ToolContext` 当前仅有 `workspace`，后续可在实际工具需要时增加其他共享依赖。
+
+仍未实现：
+
+- 完整 JSON Schema 的运行时校验；
+- AgentRunner 执行 `ToolCallRequest` 并将结果转换为 `ToolMessage` 的流程；
+- 工具的并发调度、上下文注入和自动重试。
 
 目前已有 `ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool`。`WriteFileTool` 仅支持创建或完整覆盖，`EditFileTool` 仅支持恰好一次的精确替换；删除文件能力仍未实现。
 
@@ -150,16 +160,16 @@ OK (skipped=6)
 
 在 AgentRunner 和工具系统完成前，暂不实现以下内容：
 
-- 自动工具发现、注册和调度执行；
+- AgentRunner 内的自动工具调度执行；
 - 多 Provider 自动路由和 fallback；
 - 重试、限流、熔断和成本控制；
 - 多模态输入、音频、图像和文件内容；
-- 结构化输出校验和 JSON Schema 强制解码；
+- 完整 JSON Schema 校验和结构化输出强制解码；
 - 复杂的思考过程流式事件暴露；
 - 生产级日志、指标、追踪和持久化。
 
 ## 下一步建议
 
-1. 设计最小 `ToolRegistry`，按名称查找 `Tool` 并统一执行。
-2. 将 `AgentRunner` 接入 `LLMProvider`，实现一次完整的“模型请求 → 工具调用 → 工具结果 → 模型再次请求”循环。
-3. 根据 AgentRunner 的实际需求，再收敛 Provider 配置、流式事件和工具 Schema 的统一设计。
+1. 将 `AgentRunner` 接入 `LLMProvider`、`ToolRegistry` 和 `ToolLoader`，实现一次完整的“模型请求 → 工具调用 → 工具结果 → 模型再次请求”循环。
+2. 在 AgentRunner 中将 `ToolResult` 映射为 `ToolMessage`，并保证工具调用 ID 与消息历史一致。
+3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。

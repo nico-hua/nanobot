@@ -1,7 +1,7 @@
 import unittest
 from typing import Any
 
-from nanobot.tools import Tool, ToolParameter, ToolResult
+from nanobot.tools import Tool, ToolContext, ToolParameter, ToolResult
 from test.tools.fakes import WeatherTool
 
 
@@ -139,6 +139,12 @@ class ToolTest(unittest.TestCase):
             tool.parameters_schema,
             {"type": "object", "properties": {}},
         )
+
+    def test_default_factory_creates_tools_without_dependencies(self) -> None:
+        tool = WeatherTool.create(ToolContext())
+
+        self.assertTrue(WeatherTool.enabled(ToolContext()))
+        self.assertIsInstance(tool, WeatherTool)
 
 
 class ToolExecutionTest(unittest.IsolatedAsyncioTestCase):
