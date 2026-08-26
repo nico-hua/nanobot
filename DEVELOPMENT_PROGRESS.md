@@ -46,17 +46,46 @@
 - [x] 实现 workspace 范围内的 `WriteFileTool`，支持 UTF-8 文件创建、父目录创建和完整覆盖写入。
 - [x] 实现 workspace 范围内的 `EditFileTool`，支持恰好一次的 UTF-8 文本替换。
 - [x] 实现 workspace 范围内的 `ListDirTool`，支持稳定排序、递归和返回条目限制。
+- [x] 实现 `ExecTool`，支持一次性 shell 命令、超时、stdout/stderr、退出码和输出截断。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 65 tests in 0.311s
+Ran 73 tests in 3.185s
 OK (skipped=6)
 ```
 
 6 个跳过的测试是需要显式配置 API key 和环境变量后才运行的 live tests，默认不会访问网络。
+
+## 待实现的工具
+
+### 核心开发能力
+
+- [ ] `find_files`：查找 workspace 内的文件。
+- [ ] `grep`：搜索文件内容。
+- [ ] `apply_patch`：批量、结构化修改文件。
+- [ ] `write_stdin`：向长时间运行的命令写入标准输入。
+- [ ] `list_exec_sessions`：查看运行中的命令。
+
+### 常用 Agent 能力
+
+- [ ] `web_search`：网络搜索。
+- [ ] `web_fetch`：读取网页内容。
+- [ ] `message`：主动发送消息。
+- [ ] `cron`：定时任务。
+- [ ] `spawn`：创建子 Agent。
+
+### 高级扩展能力
+
+- [ ] `generate_image`：图片生成。
+- [ ] `list_sessions` / `search_sessions` / `read_session`：查询历史会话。
+- [ ] `send_session_message`：跨会话通信。
+- [ ] `create_goal` / `update_goal`：持续任务管理。
+- [ ] `my`：Agent 运行时控制。
+- [ ] `run_cli_app`：调用外部 CLI 应用。
+- [ ] MCP 工具支持。
 
 ## 待优化的点
 
@@ -78,6 +107,8 @@ OK (skipped=6)
 - AgentRunner 执行工具并将结果转换为 `ToolMessage` 的流程。
 
 目前已有 `ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool`。`WriteFileTool` 仅支持创建或完整覆盖，`EditFileTool` 仅支持恰好一次的精确替换；删除文件能力仍未实现。
+
+`ExecTool` 支持 workspace 内的可选工作目录、最小化子进程环境和超时进程清理，但不提供安全沙箱、命令白名单或权限隔离。操作系统 sandbox 仍是限制文件、网络、系统调用和进程树权限的必要边界。
 
 ### 3. 流式工具调用能力仍不完整
 
