@@ -1,6 +1,6 @@
 # 项目开发进度
 
-最后更新：2026-08-21
+最后更新：2026-08-26
 
 ## 项目目标
 
@@ -42,13 +42,17 @@
 - [x] 为 `Tool` 实现 OpenAI function calling 与 Anthropic tool use 的 schema 转换。
 - [x] 将 Provider 的 `tools` 参数收敛为 `Sequence[Tool]`，并在 Provider 边界转换为厂商 schema。
 - [x] 添加工具基础抽象的 focused tests。
+- [x] 实现 workspace 范围内的 `ReadFileTool`，支持 UTF-8 文本、行偏移和行数限制。
+- [x] 实现 workspace 范围内的 `WriteFileTool`，支持 UTF-8 文件创建、父目录创建和完整覆盖写入。
+- [x] 实现 workspace 范围内的 `EditFileTool`，支持恰好一次的 UTF-8 文本替换。
+- [x] 实现 workspace 范围内的 `ListDirTool`，支持稳定排序、递归和返回条目限制。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 32 tests in 0.064s
+Ran 65 tests in 0.311s
 OK (skipped=6)
 ```
 
@@ -72,6 +76,8 @@ OK (skipped=6)
 - 工具注册表或 `ToolRegistry`；
 - 工具参数 JSON Schema 的运行时校验；
 - AgentRunner 执行工具并将结果转换为 `ToolMessage` 的流程。
+
+目前已有 `ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool`。`WriteFileTool` 仅支持创建或完整覆盖，`EditFileTool` 仅支持恰好一次的精确替换；删除文件能力仍未实现。
 
 ### 3. 流式工具调用能力仍不完整
 
