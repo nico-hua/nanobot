@@ -16,7 +16,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
-from test.tools.fakes import WeatherTool
+from tests.tools.fakes import WeatherTool
 
 
 class FakeTextStream:

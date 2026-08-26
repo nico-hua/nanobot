@@ -2,7 +2,7 @@ import unittest
 from typing import Any
 
 from nanobot.tools import Tool, ToolContext, ToolParameter, ToolResult
-from test.tools.fakes import WeatherTool
+from tests.tools.fakes import WeatherTool
 
 
 class EchoTool(Tool):

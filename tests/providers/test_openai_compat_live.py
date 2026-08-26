@@ -1,32 +1,27 @@
 import os
 import unittest
 
-from nanobot.providers import AnthropicCompatProvider, HumanMessage, SystemMessage
-from test.tools.fakes import WeatherTool
+from nanobot.providers import HumanMessage, OpenAICompatProvider, SystemMessage
+from tests.tools.fakes import WeatherTool
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_API_BASE = os.getenv(
-    "DEEPSEEK_ANTHROPIC_API_BASE",
-    "https://api.deepseek.com/anthropic",
-)
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_ANTHROPIC_MODEL", "deepseek-v4-flash")
-RUN_LIVE_TESTS = os.getenv("RUN_DEEPSEEK_ANTHROPIC_LIVE_TESTS") == "1"
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+RUN_DEEPSEEK_LIVE_TESTS = os.getenv("RUN_DEEPSEEK_LIVE_TESTS") == "1"
 
 @unittest.skipUnless(
-    DEEPSEEK_API_KEY and RUN_LIVE_TESTS,
-    "set DEEPSEEK_API_KEY and RUN_DEEPSEEK_ANTHROPIC_LIVE_TESTS=1 to run live tests",
+    DEEPSEEK_API_KEY and RUN_DEEPSEEK_LIVE_TESTS,
+    "set DEEPSEEK_API_KEY and RUN_DEEPSEEK_LIVE_TESTS=1 to run live tests",
 )
-class DeepSeekAnthropicLiveTest(unittest.IsolatedAsyncioTestCase):
+class DeepSeekLiveTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.provider = AnthropicCompatProvider(
+        self.provider = OpenAICompatProvider(
             api_key=DEEPSEEK_API_KEY or "",
             api_base=DEEPSEEK_API_BASE,
             default_model=DEEPSEEK_MODEL,
-            default_max_tokens=64,
-            default_thinking={"type": "disabled"},
         )
 
-    async def test_deepseek_anthropic_complete(self) -> None:
+    async def test_deepseek_complete_chat(self) -> None:
         response = await self.provider.complete(
             (
                 SystemMessage(content="Reply with one short greeting."),
@@ -38,14 +33,14 @@ class DeepSeekAnthropicLiveTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(response.content)
 
-    async def test_deepseek_anthropic_stream(self) -> None:
+    async def test_deepseek_stream_chat(self) -> None:
         deltas: list[str] = []
 
         async def on_delta(delta: str) -> None:
             deltas.append(delta)
 
         response = await self.provider.stream(
-            (HumanMessage(content="Reply with one short greeting."),),
+            (HumanMessage(content="Reply with exactly one short greeting."),),
             max_tokens=16,
             temperature=0,
             on_delta=on_delta,
@@ -55,11 +50,11 @@ class DeepSeekAnthropicLiveTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(deltas)
         self.assertEqual("".join(deltas), response.content)
 
-    async def test_deepseek_anthropic_tool_call(self) -> None:
+    async def test_deepseek_requests_weather_tool_call(self) -> None:
         response = await self.provider.complete(
             (
                 SystemMessage(
-                    content="You must call get_weather for weather questions."
+                    content="You must call get_weather to answer weather questions."
                 ),
                 HumanMessage(content="What is the weather in Beijing?"),
             ),

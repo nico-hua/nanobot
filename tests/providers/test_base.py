@@ -15,7 +15,7 @@ from nanobot.providers import (
     ToolMessage,
 )
 from nanobot.tools import Tool
-from test.tools.fakes import WeatherTool
+from tests.tools.fakes import WeatherTool
 
 
 class FakeProvider(LLMProvider):

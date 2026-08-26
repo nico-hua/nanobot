@@ -51,14 +51,23 @@
 - [x] 为 `Tool` 增加 `enabled(context)` 和 `create(context)` 工厂协议，并让 workspace builtin 工具按 context 决定是否启用和创建。
 - [x] 实现 `ToolRegistry`，支持稳定注册顺序、查找、移除、统一 schema、参数校验和异步执行。
 - [x] 实现 `ToolLoader`，自动发现并稳定加载 builtin 工具，通过 `ToolContext` 创建后注册到 `ToolRegistry`。
+- [x] 增加 `MCPServerConfig`，支持 stdio、SSE 与 Streamable HTTP 的 MCP tools 配置。
+- [x] 实现 `MCPProvider` 与 `MCPToolWrapper`：动态连接 MCP Server、注册工具、执行文本工具调用，并在关闭时注销工具和释放连接。
+- [x] 添加本地 FastMCP stdio 集成测试：启动真实 MCP Server，通过 `ToolRegistry` 注册并调用 `add_numbers` 工具。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 87 tests in 2.958s
+Ran 100 tests in 3.788s
 OK (skipped=6)
+```
+
+测试目录当前为 `tests/`；完整离线测试命令为：
+
+```powershell
+python -B -m unittest discover -s tests -t . -p "test*.py"
 ```
 
 6 个跳过的测试是需要显式配置 API key 和环境变量后才运行的 live tests，默认不会访问网络。
@@ -89,7 +98,7 @@ OK (skipped=6)
 - [ ] `create_goal` / `update_goal`：持续任务管理。
 - [ ] `my`：Agent 运行时控制。
 - [ ] `run_cli_app`：调用外部 CLI 应用。
-- [ ] MCP 工具支持。
+- [x] MCP 工具支持（仅 stdio、SSE、Streamable HTTP 传输和 tools）。
 
 ## 待优化的点
 
@@ -115,6 +124,8 @@ OK (skipped=6)
 - 完整 JSON Schema 的运行时校验；
 - AgentRunner 执行 `ToolCallRequest` 并将结果转换为 `ToolMessage` 的流程；
 - 工具的并发调度、上下文注入和自动重试。
+
+`MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
 
 目前已有 `ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool`。`WriteFileTool` 仅支持创建或完整覆盖，`EditFileTool` 仅支持恰好一次的精确替换；删除文件能力仍未实现。
 

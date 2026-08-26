@@ -5,8 +5,8 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
-from test.tools.fakes import WeatherTool
+from nanobot.tools import Tool, ToolRegistry, ToolResult
+from tests.tools.fakes import WeatherTool
 
 
 class FailingTool(Tool):
