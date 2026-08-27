@@ -42,8 +42,8 @@ class ScriptedProvider(LLMProvider):
 class MessageBusTest(unittest.IsolatedAsyncioTestCase):
     async def test_publishes_and_consumes_each_message_direction(self) -> None:
         bus = MessageBus()
-        inbound = InboundMessage("test", "chat-1", "session-1", "Hello")
-        outbound = OutboundMessage("test", "chat-1", "session-1", "Hi")
+        inbound = InboundMessage("test", "chat-1", "sender-1", "session-1", "Hello")
+        outbound = OutboundMessage("test", "chat-1", "sender-1", "session-1", "Hi")
 
         await bus.publish_inbound(inbound)
         await bus.publish_outbound(outbound)
@@ -57,7 +57,7 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
         bus = MessageBus()
         provider = ScriptedProvider((LLMResponse(content="Hello back."),))
         loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), message_bus=bus)
-        inbound = InboundMessage("test", "chat-1", "session-1", "Hello")
+        inbound = InboundMessage("test", "chat-1", "sender-1", "session-1", "Hello")
 
         await bus.publish_inbound(inbound)
         worker = asyncio.create_task(loop.run())
@@ -66,7 +66,13 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             outbound,
-            OutboundMessage("test", "chat-1", "session-1", "Hello back."),
+            OutboundMessage(
+                "test",
+                "chat-1",
+                "sender-1",
+                "session-1",
+                "Hello back.",
+            ),
         )
         self.assertEqual(provider.complete_calls[0][-1].content, "Hello")
 
@@ -79,8 +85,12 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), message_bus=bus)
-        await bus.publish_inbound(InboundMessage("test", "chat-1", "one", "First"))
-        await bus.publish_inbound(InboundMessage("test", "chat-2", "two", "Second"))
+        await bus.publish_inbound(
+            InboundMessage("test", "chat-1", "sender-1", "one", "First")
+        )
+        await bus.publish_inbound(
+            InboundMessage("test", "chat-2", "sender-2", "two", "Second")
+        )
 
         worker = asyncio.create_task(loop.run())
         first = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
@@ -88,6 +98,7 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
         await _cancel_worker(self, worker)
 
         self.assertEqual((first.session_id, second.session_id), ("one", "two"))
+        self.assertEqual((first.sender_id, second.sender_id), ("sender-1", "sender-2"))
         self.assertEqual(provider.complete_calls[0][-1].content, "First")
         self.assertEqual(provider.complete_calls[1][-1].content, "Second")
         self.assertEqual(len(provider.complete_calls[1]), 1)

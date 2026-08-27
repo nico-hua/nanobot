@@ -1,4 +1,4 @@
-"""Configuration models for tools and MCP servers."""
+"""Configuration models for tools, MCP servers, and channels."""
 
 from __future__ import annotations
 
@@ -8,6 +8,37 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MCPTransportType = Literal["stdio", "sse", "streamableHttp"]
+
+
+class QQChannelConfig(BaseModel):
+    """Credentials and sender allow-list for one QQ channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    app_id: str
+    secret: str
+    allow_from: list[str] = Field(default_factory=lambda: ["*"])
+
+    @field_validator("app_id", "secret")
+    @classmethod
+    def _reject_blank_credentials(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("allow_from")
+    @classmethod
+    def _validate_allow_from(cls, value: list[str]) -> list[str]:
+        if any(not sender_id.strip() for sender_id in value):
+            raise ValueError("sender IDs must not be blank")
+        if "*" in value and value != ["*"]:
+            raise ValueError('"*" must be the only allow_from selector')
+        return value
+
+    def allows_sender(self, sender_id: str) -> bool:
+        """Return whether this sender is allowed to use the QQ channel."""
+
+        return self.allow_from == ["*"] or sender_id in self.allow_from
 
 
 class MCPServerConfig(BaseModel):

@@ -10,5 +10,8 @@ htmlcov/
 venv/
 .env
 
+# Runtime logs
+botpy.log
+
 # Editor settings
 .vscode/

@@ -1,6 +1,6 @@
 # 项目开发进度
 
-最后更新：2026-08-26
+最后更新：2026-08-27
 
 ## 项目目标
 
@@ -59,13 +59,17 @@
 - [x] 实现最小单轮 `AgentLoop` 和内存 `SessionStore`：读取 session 历史、追加用户消息、运行 Agent，并仅在成功后保存完整消息历史。
 - [x] 实现基于 `asyncio.Queue` 的内存 `MessageBus`：支持带 channel、chat ID、session ID 的入站/出站消息发布和消费。
 - [x] 将 `AgentLoop.run()` 接入 `MessageBus`：持续消费入站消息、最多等待一秒后继续轮询，并将最终回答发布为出站消息；`process_direct()` 保留单条显式路由消息的直接处理入口。
+- [x] 实现最小 `BaseChannel`、`FakeChannel` 与 `ChannelManager`：Channel 负责外部消息和 `MessageBus` 的转换，Manager 统一管理生命周期并将出站消息路由到目标 Channel。
+- [x] 实现 QQ 文本 Channel：基于可选依赖 `qq-botpy` 支持 C2C 与群聊 @ 消息，保留 QQ 路由字段和原始 `message_id`，并按聊天类型发送文本回复；SDK 缺失时仅在启动时给出明确错误。
+- [x] 增加 `QQChannelConfig`：提供 QQ App ID、Secret 和 `allow_from` 用户 OpenID 白名单配置。
+- [x] 增加默认跳过的 QQ → Agent → DeepSeek → 本地工具 → QQ 手工端到端测试：凭据仅从本地 `.env`/环境变量读取，验证模型工具调用、工具结果回传、会话历史和 QQ 文本回复。
 
 ### 当前测试状态
 
-最近一次离线测试结果：
+最近一次记录的离线测试结果：
 
 ```text
-Ran 114 tests in 4.044s
+Ran 130 tests in 4.258s
 OK (skipped=6)
 ```
 
@@ -75,7 +79,7 @@ OK (skipped=6)
 python -B -m unittest discover -s tests -t . -p "test*.py"
 ```
 
-6 个跳过的测试是需要显式配置 API key 和环境变量后才运行的 live tests，默认不会访问网络。
+用户已通过 QQ 与 DeepSeek 的手工端到端测试。该测试默认跳过，只有设置 `NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS=1` 并配置本地凭据后才会建立真实网络连接；凭据不会提交到仓库。
 
 ## 待实现的工具
 
@@ -133,7 +137,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - 完整 JSON Schema 的运行时校验；
 - 流式、并行工具调度、上下文注入和自动重试；
 - 会话持久化、并发访问控制和长期记忆。
-- 真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
+- 除 QQ 文本消息外的真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
 
@@ -175,14 +179,14 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 4. 如何处理 Anthropic、OpenAI 及其他兼容协议在 `max_tokens`、thinking、finish reason 和 usage 字段上的差异。
 5. 是否需要支持多轮工具调用，以及如何保证工具结果、调用 ID 和消息历史的一致性。
 6. 如何在不泄露凭据的前提下组织 live tests，并在 CI 中默认只运行离线测试。
-7. 如何将当前内存 `MessageBus` 接入真实 Channel、可靠投递和长期记忆模块，同时保持现有单轮执行边界清晰。
+7. 如何在现有 QQ 文本 Channel 之外接入更多真实 Channel，并加入可靠投递和长期记忆模块，同时保持现有单轮执行边界清晰。
 
 ## 当前明确不实现的能力
 
 当前阶段暂不实现以下内容：
 
 - AgentRunner 内的 streaming、并行工具调度和自动重试；
-- 真实 Channel、消息重试、优先级、总线持久化和复杂并发控制；
+- 除 QQ 文本消息外的真实 Channel、消息重试、优先级、总线持久化和复杂并发控制；
 - 多 Provider 自动路由和 fallback；
 - 重试、限流、熔断和成本控制；
 - 多模态输入、音频、图像和文件内容；
@@ -193,5 +197,5 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 ## 下一步建议
 
 1. 为 `SessionStore` 设计持久化接口，并在实际需要时加入 session 并发访问控制。
-2. 在 `MessageBus` 之上接入真实 Channel，明确外部事件、用户消息和 session ID 的路由方式。
+2. 扩展 QQ Channel 的错误处理和路由测试，或在相同 `BaseChannel` 边界上接入下一个真实 Channel。
 3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。

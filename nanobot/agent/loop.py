@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 
-from ..bus import InboundMessage, MessageBus, OutboundMessage
+from ..bus import MessageBus, OutboundMessage
 from ..providers import BaseMessage, HumanMessage, LLMProvider
 from ..tools import ToolRegistry
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
@@ -86,6 +86,7 @@ class AgentLoop:
                 OutboundMessage(
                     channel=inbound.channel,
                     chat_id=inbound.chat_id,
+                    sender_id=inbound.sender_id,
                     session_id=inbound.session_id,
                     content=result.content or "",
                 )
@@ -100,13 +101,10 @@ class AgentLoop:
     ) -> AgentRunResult:
         """Process one routed message without reading or writing bus queues."""
 
-        inbound = InboundMessage(
-            channel=channel,
-            chat_id=chat_id,
-            session_id=session_id,
-            content=content,
-        )
-        return await self._run_once(inbound.content, inbound.session_id)
+        if not isinstance(content, str):
+            raise TypeError("content must be a string")
+        _validate_direct_routing(channel, chat_id, session_id)
+        return await self._run_once(content, session_id)
 
     async def _run_once(self, content: str, session_id: str) -> AgentRunResult:
         """Run one validated user message against a session's existing history."""
@@ -125,3 +123,13 @@ class AgentLoop:
 def _validate_session_id(session_id: str) -> None:
     if not isinstance(session_id, str) or not session_id.strip():
         raise ValueError("session_id must be a non-empty string")
+
+
+def _validate_direct_routing(channel: str, chat_id: str, session_id: str) -> None:
+    for name, value in (
+        ("channel", channel),
+        ("chat_id", chat_id),
+        ("session_id", session_id),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")

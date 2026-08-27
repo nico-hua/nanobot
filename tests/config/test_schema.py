@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from nanobot.config import MCPServerConfig
+from nanobot.config import MCPServerConfig, QQChannelConfig
 
 
 class MCPServerConfigTest(unittest.TestCase):
@@ -48,3 +48,25 @@ class MCPServerConfigTest(unittest.TestCase):
         for values in invalid_configs:
             with self.subTest(values=values), self.assertRaises(ValidationError):
                 MCPServerConfig(**values)
+
+
+class QQChannelConfigTest(unittest.TestCase):
+    def test_defaults_to_allowing_all_senders(self) -> None:
+        config = QQChannelConfig(app_id="app", secret="secret")
+
+        self.assertEqual(config.allow_from, ["*"])
+        self.assertTrue(config.allows_sender("user-1"))
+
+    def test_filters_senders_and_rejects_invalid_values(self) -> None:
+        config = QQChannelConfig(
+            app_id="app",
+            secret="secret",
+            allow_from=["user-1"],
+        )
+
+        self.assertTrue(config.allows_sender("user-1"))
+        self.assertFalse(config.allows_sender("user-2"))
+        with self.assertRaises(ValidationError):
+            QQChannelConfig(app_id="", secret="secret")
+        with self.assertRaises(ValidationError):
+            QQChannelConfig(app_id="app", secret="secret", allow_from=["*", "user-1"])
