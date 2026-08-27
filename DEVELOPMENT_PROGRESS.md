@@ -54,13 +54,16 @@
 - [x] 增加 `MCPServerConfig`，支持 stdio、SSE 与 Streamable HTTP 的 MCP tools 配置。
 - [x] 实现 `MCPProvider` 与 `MCPToolWrapper`：动态连接 MCP Server、注册工具、执行文本工具调用，并在关闭时注销工具和释放连接。
 - [x] 添加本地 FastMCP stdio 集成测试：启动真实 MCP Server，通过 `ToolRegistry` 注册并调用 `add_numbers` 工具。
+- [x] 实现最小非流式 `AgentRunner`：调用 `LLMProvider.complete`、顺序执行 `ToolRegistry` 中的工具，并将工具结果作为 `ToolMessage` 回传模型直到得到最终回答。
+- [x] 设计 `AgentRunSpec` 和 `AgentRunResult`：统一运行输入，并返回完整消息历史、已调用工具、累计 token usage 与停止原因。
+- [x] 实现最小单轮 `AgentLoop` 和内存 `SessionStore`：读取 session 历史、追加用户消息、运行 Agent，并仅在成功后保存完整消息历史。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 100 tests in 3.788s
+Ran 110 tests in 4.069s
 OK (skipped=6)
 ```
 
@@ -111,7 +114,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 `ToolParameter` 当前仅支持 string、integer、number 和 boolean。数组、嵌套对象、枚举、默认值等复杂 JSON Schema 能力仍待实际需求出现后扩展。`ToolCallRequest` 已经作为模型输出的统一格式保留。
 
-### 2. Agent 工具调用流程尚未建立
+### 2. Agent 工具调用与会话流程仍是最小版本
 
 目前已有 `ToolContext`、`ToolRegistry` 和 `ToolLoader`：
 
@@ -119,11 +122,13 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - `ToolLoader` 稳定发现 builtin 工具，跳过私有模块、抽象类和重复类，并通过 `enabled(context)` / `create(context)` 完成实例化；
 - `ToolContext` 当前仅有 `workspace`，后续可在实际工具需要时增加其他共享依赖。
 
+当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用内存 `SessionStore` 为每个 session 保存成功运行后的完整消息历史；失败时不会覆盖已有历史。
+
 仍未实现：
 
 - 完整 JSON Schema 的运行时校验；
-- AgentRunner 执行 `ToolCallRequest` 并将结果转换为 `ToolMessage` 的流程；
-- 工具的并发调度、上下文注入和自动重试。
+- 流式、并行工具调度、上下文注入和自动重试；
+- 会话持久化、并发访问控制和长期记忆。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
 
@@ -160,18 +165,18 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 ## 待解决的问题
 
 1. 如何在不破坏简单 `ToolParameter` 模型的前提下，扩展数组、嵌套对象、枚举和默认值等复杂参数能力。
-2. AgentRunner 应该只接收 `Tool`，还是允许传入工具注册表按需解析。
+2. 是否需要让 `AgentLoop` 支持持久化 session，以及如何定义 session 的并发访问边界。
 3. 如何统一处理不同厂商的流式事件，尤其是文本、工具调用片段、思考内容和最终 usage。
 4. 如何处理 Anthropic、OpenAI 及其他兼容协议在 `max_tokens`、thinking、finish reason 和 usage 字段上的差异。
 5. 是否需要支持多轮工具调用，以及如何保证工具结果、调用 ID 和消息历史的一致性。
 6. 如何在不泄露凭据的前提下组织 live tests，并在 CI 中默认只运行离线测试。
-7. AgentRunner、工具注册与调度、上下文管理、会话和记忆模块尚未实现，Provider 目前还没有接入完整 Agent 执行循环。
+7. 如何将 `AgentLoop` 接入未来的 Channel、消息总线和长期记忆模块，同时保持现有单轮执行边界清晰。
 
 ## 当前明确不实现的能力
 
-在 AgentRunner 和工具系统完成前，暂不实现以下内容：
+当前阶段暂不实现以下内容：
 
-- AgentRunner 内的自动工具调度执行；
+- AgentRunner 内的 streaming、并行工具调度和自动重试；
 - 多 Provider 自动路由和 fallback；
 - 重试、限流、熔断和成本控制；
 - 多模态输入、音频、图像和文件内容；
@@ -181,6 +186,6 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 ## 下一步建议
 
-1. 将 `AgentRunner` 接入 `LLMProvider`、`ToolRegistry` 和 `ToolLoader`，实现一次完整的“模型请求 → 工具调用 → 工具结果 → 模型再次请求”循环。
-2. 在 AgentRunner 中将 `ToolResult` 映射为 `ToolMessage`，并保证工具调用 ID 与消息历史一致。
+1. 为 `SessionStore` 设计持久化接口，并在实际需要时加入 session 并发访问控制。
+2. 在 `AgentLoop` 之上接入 Channel 或消息入口，明确用户消息与 session ID 的路由方式。
 3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。
