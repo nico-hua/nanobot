@@ -87,7 +87,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         session_store = SessionStore()
         loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), session_store)
 
-        result = await loop.run("Hello", "session-1")
+        result = await loop.process_direct("Hello", "test", "chat-1", "session-1")
 
         self.assertEqual(result.content, "Hello.")
         self.assertEqual(
@@ -105,8 +105,8 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         session_store = SessionStore()
         loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), session_store)
 
-        await loop.run("First question.", "session-1")
-        await loop.run("Second question.", "session-1")
+        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await loop.process_direct("Second question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[1],
@@ -137,7 +137,12 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_store,
         )
 
-        result = await loop.run("Echo hello.", "session-1")
+        result = await loop.process_direct(
+            "Echo hello.",
+            "test",
+            "chat-1",
+            "session-1",
+        )
 
         self.assertEqual(session_store.load("session-1"), result.messages)
         self.assertEqual(
@@ -158,7 +163,12 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         loop = AgentLoop(runner, ScriptedProvider(()), ToolRegistry(), session_store)
 
         with self.assertRaisesRegex(AgentRunnerError, "model unavailable"):
-            await loop.run("New question.", "session-1")
+            await loop.process_direct(
+                "New question.",
+                "test",
+                "chat-1",
+                "session-1",
+            )
 
         self.assertEqual(session_store.load("session-1"), previous_history)
         self.assertEqual(

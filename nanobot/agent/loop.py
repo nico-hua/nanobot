@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 
+from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..providers import BaseMessage, HumanMessage, LLMProvider
 from ..tools import ToolRegistry
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
@@ -41,6 +43,7 @@ class AgentLoop:
         provider: LLMProvider,
         tool_registry: ToolRegistry,
         session_store: SessionStore | None = None,
+        message_bus: MessageBus | None = None,
     ) -> None:
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
@@ -50,21 +53,67 @@ class AgentLoop:
             raise TypeError("AgentLoop requires a ToolRegistry")
         if session_store is not None and not isinstance(session_store, SessionStore):
             raise TypeError("AgentLoop session_store must be a SessionStore")
+        if message_bus is not None and not isinstance(message_bus, MessageBus):
+            raise TypeError("AgentLoop message_bus must be a MessageBus")
 
         self._runner = runner
         self._provider = provider
         self._tool_registry = tool_registry
         self._session_store = session_store if session_store is not None else SessionStore()
+        self._message_bus = message_bus
 
-    async def run(self, user_message: str, session_id: str) -> AgentRunResult:
-        """Run one user message against a session's existing history."""
+    async def run(self) -> None:
+        """Continuously process inbound bus messages until cancelled."""
 
-        if not isinstance(user_message, str):
-            raise TypeError("user_message must be a string")
+        if self._message_bus is None:
+            raise RuntimeError("AgentLoop requires a MessageBus for continuous running")
+
+        while True:
+            try:
+                inbound = await asyncio.wait_for(
+                    self._message_bus.consume_inbound(),
+                    timeout=1,
+                )
+            except TimeoutError:
+                continue
+            result = await self.process_direct(
+                inbound.content,
+                inbound.channel,
+                inbound.chat_id,
+                inbound.session_id,
+            )
+            await self._message_bus.publish_outbound(
+                OutboundMessage(
+                    channel=inbound.channel,
+                    chat_id=inbound.chat_id,
+                    session_id=inbound.session_id,
+                    content=result.content or "",
+                )
+            )
+
+    async def process_direct(
+        self,
+        content: str,
+        channel: str,
+        chat_id: str,
+        session_id: str,
+    ) -> AgentRunResult:
+        """Process one routed message without reading or writing bus queues."""
+
+        inbound = InboundMessage(
+            channel=channel,
+            chat_id=chat_id,
+            session_id=session_id,
+            content=content,
+        )
+        return await self._run_once(inbound.content, inbound.session_id)
+
+    async def _run_once(self, content: str, session_id: str) -> AgentRunResult:
+        """Run one validated user message against a session's existing history."""
 
         history = self._session_store.load(session_id)
         spec = AgentRunSpec(
-            messages=(*history, HumanMessage(content=user_message)),
+            messages=(*history, HumanMessage(content=content)),
             provider=self._provider,
             tool_registry=self._tool_registry,
         )

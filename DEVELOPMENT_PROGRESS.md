@@ -57,13 +57,15 @@
 - [x] 实现最小非流式 `AgentRunner`：调用 `LLMProvider.complete`、顺序执行 `ToolRegistry` 中的工具，并将工具结果作为 `ToolMessage` 回传模型直到得到最终回答。
 - [x] 设计 `AgentRunSpec` 和 `AgentRunResult`：统一运行输入，并返回完整消息历史、已调用工具、累计 token usage 与停止原因。
 - [x] 实现最小单轮 `AgentLoop` 和内存 `SessionStore`：读取 session 历史、追加用户消息、运行 Agent，并仅在成功后保存完整消息历史。
+- [x] 实现基于 `asyncio.Queue` 的内存 `MessageBus`：支持带 channel、chat ID、session ID 的入站/出站消息发布和消费。
+- [x] 将 `AgentLoop.run()` 接入 `MessageBus`：持续消费入站消息、最多等待一秒后继续轮询，并将最终回答发布为出站消息；`process_direct()` 保留单条显式路由消息的直接处理入口。
 
 ### 当前测试状态
 
 最近一次离线测试结果：
 
 ```text
-Ran 110 tests in 4.069s
+Ran 114 tests in 4.044s
 OK (skipped=6)
 ```
 
@@ -124,11 +126,14 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用内存 `SessionStore` 为每个 session 保存成功运行后的完整消息历史；失败时不会覆盖已有历史。
 
+当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID 和内容；`AgentLoop.run()` 仅消费总线消息并发布结果，`process_direct()` 则处理一条显式传入的路由消息。总线为空时，Loop 每次最多等待一秒后继续轮询；取消 Loop 不会留下它创建的后台任务。
+
 仍未实现：
 
 - 完整 JSON Schema 的运行时校验；
 - 流式、并行工具调度、上下文注入和自动重试；
 - 会话持久化、并发访问控制和长期记忆。
+- 真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
 
@@ -170,13 +175,14 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 4. 如何处理 Anthropic、OpenAI 及其他兼容协议在 `max_tokens`、thinking、finish reason 和 usage 字段上的差异。
 5. 是否需要支持多轮工具调用，以及如何保证工具结果、调用 ID 和消息历史的一致性。
 6. 如何在不泄露凭据的前提下组织 live tests，并在 CI 中默认只运行离线测试。
-7. 如何将 `AgentLoop` 接入未来的 Channel、消息总线和长期记忆模块，同时保持现有单轮执行边界清晰。
+7. 如何将当前内存 `MessageBus` 接入真实 Channel、可靠投递和长期记忆模块，同时保持现有单轮执行边界清晰。
 
 ## 当前明确不实现的能力
 
 当前阶段暂不实现以下内容：
 
 - AgentRunner 内的 streaming、并行工具调度和自动重试；
+- 真实 Channel、消息重试、优先级、总线持久化和复杂并发控制；
 - 多 Provider 自动路由和 fallback；
 - 重试、限流、熔断和成本控制；
 - 多模态输入、音频、图像和文件内容；
@@ -187,5 +193,5 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 ## 下一步建议
 
 1. 为 `SessionStore` 设计持久化接口，并在实际需要时加入 session 并发访问控制。
-2. 在 `AgentLoop` 之上接入 Channel 或消息入口，明确用户消息与 session ID 的路由方式。
+2. 在 `MessageBus` 之上接入真实 Channel，明确外部事件、用户消息和 session ID 的路由方式。
 3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。
