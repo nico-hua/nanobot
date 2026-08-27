@@ -63,14 +63,18 @@
 - [x] 实现 QQ 文本 Channel：基于可选依赖 `qq-botpy` 支持 C2C 与群聊 @ 消息，保留 QQ 路由字段和原始 `message_id`，并按聊天类型发送文本回复；SDK 缺失时仅在启动时给出明确错误。
 - [x] 增加 `QQChannelConfig`：提供 QQ App ID、Secret 和 `allow_from` 用户 OpenID 白名单配置。
 - [x] 增加默认跳过的 QQ → Agent → DeepSeek → 本地工具 → QQ 手工端到端测试：凭据仅从本地 `.env`/环境变量读取，验证模型工具调用、工具结果回传、会话历史和 QQ 文本回复。
+- [x] 增加统一日志基础设施：`nanobot.logging.configure_logging()` 配置包级统一格式与日志级别，默认 `NullHandler` 避免未初始化时的非统一兜底输出。
+- [x] `AgentLoop` 初始化时读取 `.env`/进程环境中的 `NANOBOT_LOG_LEVEL`（环境变量优先、默认 `INFO`），并配置 `nanobot` 命名空间日志。
+- [x] 在 Agent、Provider、ToolRegistry、MCP、MessageBus、SessionStore 与 Channel 的关键生命周期和异常边界加入不含消息内容、工具参数或凭据的模块级日志；工具/MCP 的意外执行异常保留 traceback，取消信号继续抛出。
+- [x] 新增 `.env.example`、日志 focused tests 与 `AGENTS.md` 的 Logging and Error Handling 开发规范。
 
 ### 当前测试状态
 
 最近一次记录的离线测试结果：
 
 ```text
-Ran 130 tests in 4.258s
-OK (skipped=6)
+Ran 137 tests in 4.002s
+OK (skipped=7)
 ```
 
 测试目录当前为 `tests/`；完整离线测试命令为：
@@ -158,9 +162,11 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - 默认模型及模型能力配置；
 - 缺少某个厂商 SDK 时的可选依赖处理。
 
-### 5. 错误和可观测性需要完善
+### 5. 错误和可观测性仍需完善
 
-当前已使用 `ProviderError` 对底层异常进行统一包装，但还没有标准化错误类型、错误码、请求上下文、重试判断和日志字段。
+当前已经有统一的包级日志格式、模块级 logger、日志级别配置和异常 traceback 记录规则；`AgentLoop` 会从 `.env` 读取 `NANOBOT_LOG_LEVEL`，进程环境变量可覆盖它。日志只记录组件名、数量和生命周期等元信息，不记录消息内容、工具参数、文件路径或凭据。
+
+仍未具备标准化错误类型、错误码、关联请求 ID、结构化日志字段、重试判断、指标、追踪和外部日志后端。
 
 ### 6. 消息模型的边界校验需要补充
 
@@ -192,7 +198,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - 多模态输入、音频、图像和文件内容；
 - 完整 JSON Schema 校验和结构化输出强制解码；
 - 复杂的思考过程流式事件暴露；
-- 生产级日志、指标、追踪和持久化。
+- 结构化日志、关联 ID、指标、追踪、外部日志后端和持久化。
 
 ## 下一步建议
 

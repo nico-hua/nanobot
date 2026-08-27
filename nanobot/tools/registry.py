@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .base import Tool, ToolParameter, ToolResult
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -43,6 +47,7 @@ class ToolRegistry:
         if tool.name in self._tools:
             raise ValueError(f"Tool is already registered: {tool.name}")
         self._tools[tool.name] = tool
+        logger.debug("Tool registered (name=%s)", tool.name)
 
     def remove(self, name: str) -> Tool | None:
         """Remove and return a tool, or return None when it is not registered."""
@@ -68,18 +73,24 @@ class ToolRegistry:
 
         tool = self.get(name)
         if tool is None:
+            logger.warning("Tool call rejected because the tool is unknown (name=%s)", name)
             return _tool_error(f"Unknown tool: {name}")
 
         validated_arguments = _validate_arguments(tool, arguments)
         if isinstance(validated_arguments, ToolResult):
+            logger.warning("Tool call rejected because arguments are invalid (name=%s)", name)
             return validated_arguments
 
         try:
             result = await tool.execute(**validated_arguments)
-        except Exception as exc:  # noqa: BLE001
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Tool execution failed (name=%s)", name)
             return _tool_error(f"Tool execution failed: {name} ({exc})")
 
         if not isinstance(result, ToolResult):
+            logger.error("Tool returned an invalid result (name=%s)", name)
             return _tool_error(f"Tool returned an invalid result: {name}")
         return result
 

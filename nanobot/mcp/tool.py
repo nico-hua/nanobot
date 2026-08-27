@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 
 from ..tools import Tool, ToolParameter, ToolResult
+
+logger = logging.getLogger(__name__)
 
 _SUPPORTED_PARAMETER_TYPES = frozenset({"string", "integer", "number", "boolean"})
 
@@ -51,15 +54,20 @@ class MCPToolWrapper(Tool):
                 self._session.call_tool(self.mcp_tool_name, arguments=arguments),
                 timeout=self._tool_timeout,
             )
+        except asyncio.CancelledError:
+            raise
         except TimeoutError:
+            logger.warning("MCP tool call timed out (name=%s)", self.name)
             return _tool_error(
                 f"MCP tool timed out after {self._tool_timeout:g} seconds: {self.name}"
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
+            logger.exception("MCP tool call failed (name=%s)", self.name)
             return _tool_error(f"MCP tool call failed: {self.name} ({exc})")
 
         content = _text_content(result)
         if getattr(result, "isError", False):
+            logger.warning("MCP tool returned an error result (name=%s)", self.name)
             return _tool_error(f"MCP tool returned an error: {self.name} ({content})")
         return ToolResult(content=content)
 

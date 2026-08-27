@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
@@ -11,6 +12,8 @@ from openai import AsyncOpenAI
 from ..tools import Tool
 from .base import LLMProvider, LLMResponse, ProviderError, TokenUsage
 from .messages import AIMessage, BaseMessage, ToolCallRequest, ToolMessage
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -39,6 +42,12 @@ class OpenAICompatProvider(LLMProvider):
         temperature: float | None = None,
     ) -> LLMResponse:
         request = self._build_request(messages, tools, max_tokens, temperature)
+        logger.debug(
+            "OpenAI-compatible completion requested (model=%s, messages=%d, tools=%d)",
+            self.default_model,
+            len(messages),
+            len(tools or ()),
+        )
 
         try:
             response = await self._client.chat.completions.create(**request)
@@ -46,6 +55,7 @@ class OpenAICompatProvider(LLMProvider):
         except ProviderError:
             raise
         except Exception as exc:
+            logger.exception("OpenAI-compatible completion failed")
             raise ProviderError("OpenAI-compatible completion failed") from exc
 
     async def stream(
@@ -58,6 +68,12 @@ class OpenAICompatProvider(LLMProvider):
     ) -> LLMResponse:
         request = self._build_request(messages, tools, max_tokens, temperature)
         request["stream"] = True
+        logger.debug(
+            "OpenAI-compatible streaming requested (model=%s, messages=%d, tools=%d)",
+            self.default_model,
+            len(messages),
+            len(tools or ()),
+        )
 
         try:
             response = await self._client.chat.completions.create(**request)
@@ -100,6 +116,7 @@ class OpenAICompatProvider(LLMProvider):
         except ProviderError:
             raise
         except Exception as exc:
+            logger.exception("OpenAI-compatible streaming failed")
             raise ProviderError("OpenAI-compatible streaming failed") from exc
 
     def _build_request(

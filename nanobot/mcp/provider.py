@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -16,6 +18,8 @@ from mcp.client.streamable_http import streamable_http_client
 from ..config import MCPServerConfig
 from ..tools import ToolRegistry
 from .tool import MCPToolWrapper
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,7 @@ class MCPProvider:
     async def connect_all(self) -> tuple[MCPConnectionResult, ...]:
         """Connect each configured server without letting one failure stop others."""
 
+        logger.info("Connecting configured MCP servers (count=%d)", len(self._server_configs))
         results: list[MCPConnectionResult] = []
         for server_name in sorted(self._server_configs):
             results.append(await self.connect_server(server_name))
@@ -81,6 +86,7 @@ class MCPProvider:
 
         stack = AsyncExitStack()
         registered_tools: dict[str, MCPToolWrapper] = {}
+        logger.info("Connecting MCP server (name=%s, transport=%s)", server_name, config.type)
         try:
             read_stream, write_stream = await stack.enter_async_context(
                 self._open_transport(config)
@@ -105,17 +111,30 @@ class MCPProvider:
                     raise ValueError(f"MCP tool name is already registered: {tool.name}")
                 self._registry.register(tool)
                 registered_tools[tool.name] = tool
-        except Exception as exc:  # noqa: BLE001
+        except asyncio.CancelledError:
+            for tool_name, tool in registered_tools.items():
+                if self._registry.get(tool_name) is tool:
+                    self._registry.remove(tool_name)
+            await stack.aclose()
+            logger.info("MCP server connection cancelled (name=%s)", server_name)
+            raise
+        except Exception as exc:
             for tool_name, tool in registered_tools.items():
                 if self._registry.get(tool_name) is tool:
                     self._registry.remove(tool_name)
             await stack.aclose()
             error = f"Unable to connect MCP server {server_name}: {exc}"
             self.errors[server_name] = error
+            logger.exception("Unable to connect MCP server (name=%s)", server_name)
             return MCPConnectionResult(server_name=server_name, error=error)
 
         self._connections[server_name] = _MCPConnection(stack, registered_tools)
         self.errors.pop(server_name, None)
+        logger.info(
+            "MCP server connected (name=%s, registered_tools=%d)",
+            server_name,
+            len(registered_tools),
+        )
         return MCPConnectionResult(
             server_name=server_name,
             tool_names=tuple(registered_tools),
@@ -124,6 +143,7 @@ class MCPProvider:
     async def close(self) -> None:
         """Unregister MCP tools and close all live MCP connections."""
 
+        logger.info("Closing MCP servers (count=%d)", len(self._connections))
         for server_name in tuple(self._connections):
             await self.close_server(server_name)
 
@@ -138,6 +158,7 @@ class MCPProvider:
             if self._registry.get(tool_name) is tool:
                 self._registry.remove(tool_name)
         await connection.stack.aclose()
+        logger.info("MCP server closed (name=%s)", server_name)
 
     @asynccontextmanager
     async def _open_transport(

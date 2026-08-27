@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
+
+logger = logging.getLogger(__name__)
 
 
 class BaseChannel(ABC):
@@ -36,11 +39,13 @@ class BaseChannel(ABC):
         """Mark the channel as ready to receive external input."""
 
         self._started = True
+        logger.info("Channel started")
 
     async def stop(self) -> None:
         """Mark the channel as stopped."""
 
         self._started = False
+        logger.info("Channel stopped")
 
     async def receive_external(
         self,

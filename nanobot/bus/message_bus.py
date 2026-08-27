@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .messages import InboundMessage, OutboundMessage
+
+logger = logging.getLogger(__name__)
 
 
 class MessageBus:
@@ -13,6 +16,7 @@ class MessageBus:
     def __init__(self) -> None:
         self._inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
         self._outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+        logger.debug("Message bus initialized")
 
     async def publish_inbound(self, message: InboundMessage) -> None:
         """Queue one user message for agent processing."""

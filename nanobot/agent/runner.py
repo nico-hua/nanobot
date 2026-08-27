@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -14,6 +15,8 @@ from ..providers import (
     ToolMessage,
 )
 from ..tools import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRunnerError(RuntimeError):
@@ -69,7 +72,14 @@ class AgentRunner:
         conversation = list(spec.messages)
         tools_used: list[ToolCallRequest] = []
         token_usage: TokenUsage | None = None
-        for _ in range(spec.max_iterations):
+        logger.info(
+            "Agent run started (messages=%d, tools=%d, max_iterations=%d)",
+            len(conversation),
+            len(spec.tool_registry.tools),
+            spec.max_iterations,
+        )
+        for iteration in range(spec.max_iterations):
+            logger.debug("Requesting provider completion (iteration=%d)", iteration + 1)
             response = await spec.provider.complete(
                 conversation,
                 tools=spec.tool_registry.tools or None,
@@ -77,6 +87,12 @@ class AgentRunner:
             token_usage = _combine_token_usage(token_usage, response.usage)
             if not response.tool_calls:
                 conversation.append(AIMessage(content=response.content or ""))
+                logger.info(
+                    "Agent run completed (iterations=%d, tool_calls=%d, stop_reason=%s)",
+                    iteration + 1,
+                    len(tools_used),
+                    response.finish_reason,
+                )
                 return AgentRunResult(
                     content=response.content,
                     messages=tuple(conversation),
@@ -93,6 +109,7 @@ class AgentRunner:
             )
             tools_used.extend(response.tool_calls)
             for tool_call in response.tool_calls:
+                logger.info("Executing requested tool (name=%s)", tool_call.name)
                 result = await spec.tool_registry.execute(
                     tool_call.name,
                     tool_call.arguments,
@@ -104,6 +121,7 @@ class AgentRunner:
                     )
                 )
 
+        logger.error("Agent run exceeded maximum iteration count (%d)", spec.max_iterations)
         raise AgentRunnerError(
             f"Agent exceeded the maximum iteration count: {spec.max_iterations}"
         )

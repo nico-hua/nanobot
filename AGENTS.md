@@ -70,6 +70,37 @@ After modifying code, run the relevant tests.
 
 Do not claim a task is complete if the relevant tests are failing.
 
+# Logging and Error Handling
+
+- `AgentLoop` initializes package logging with
+  `nanobot.logging.configure_logging_from_env()` during construction. Set
+  `NANOBOT_LOG_LEVEL` in `.env` (or the process environment, which takes
+  precedence); it defaults to `INFO`. The setup only configures the `nanobot`
+  logger and does not modify the host application's root logger.
+- Runtime modules that log must create a module-level logger with
+  `logging.getLogger(__name__)`. Do not use `print` for runtime diagnostics.
+- Use `DEBUG` for bounded diagnostic metadata, `INFO` for major lifecycle
+  transitions, `WARNING` for expected handled failures, and `ERROR` for an
+  unexpected failure that affects the current operation.
+- Use `logger.exception(...)` only while handling an unexpected exception at a
+  subsystem boundary, so the traceback is retained. Do not add a traceback for
+  expected validation failures or ordinary control flow.
+- Preserve existing exception contracts. Validation and provider failures
+  continue to raise their documented exceptions; do not convert every failure
+  into a log message and continue execution.
+- Tool-facing expected failures must continue to become `ToolResult` errors.
+  `ToolRegistry` converts unknown tools, invalid arguments, and unexpected tool
+  execution failures to that result while retaining the underlying traceback in
+  an error log for unexpected execution failures.
+- Never swallow `asyncio.CancelledError`. A coroutine may perform required
+  cleanup, but it must re-raise the cancellation afterwards.
+- Never log message content, tool arguments, file contents or paths, API keys,
+  secrets, access tokens, authorization headers, or other sensitive values.
+  Prefer counts, stable component names, and event types in logs.
+- New runtime modules and tests must use this logging setup and follow these
+  error-handling rules. Add focused tests when changing logging behavior or an
+  exception boundary.
+
 # Review Requirements
 
 After implementation:

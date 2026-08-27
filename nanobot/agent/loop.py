@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 
 from ..bus import MessageBus, OutboundMessage
+from ..logging import configure_logging_from_env
 from ..providers import BaseMessage, HumanMessage, LLMProvider
 from ..tools import ToolRegistry
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
+
+logger = logging.getLogger(__name__)
 
 
 class SessionStore:
@@ -32,6 +36,7 @@ class SessionStore:
         ):
             raise TypeError("messages must be a sequence of BaseMessage instances")
         self._messages_by_session[session_id] = tuple(messages)
+        logger.debug("Session history saved (messages=%d)", len(messages))
 
 
 class AgentLoop:
@@ -45,6 +50,7 @@ class AgentLoop:
         session_store: SessionStore | None = None,
         message_bus: MessageBus | None = None,
     ) -> None:
+        configure_logging_from_env()
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
         if not isinstance(provider, LLMProvider):
@@ -68,29 +74,40 @@ class AgentLoop:
         if self._message_bus is None:
             raise RuntimeError("AgentLoop requires a MessageBus for continuous running")
 
-        while True:
-            try:
-                inbound = await asyncio.wait_for(
-                    self._message_bus.consume_inbound(),
-                    timeout=1,
+        logger.info("Agent loop started")
+        try:
+            while True:
+                try:
+                    inbound = await asyncio.wait_for(
+                        self._message_bus.consume_inbound(),
+                        timeout=1,
+                    )
+                except TimeoutError:
+                    continue
+                try:
+                    result = await self.process_direct(
+                        inbound.content,
+                        inbound.channel,
+                        inbound.chat_id,
+                        inbound.session_id,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Agent loop failed while processing an inbound message")
+                    raise
+                await self._message_bus.publish_outbound(
+                    OutboundMessage(
+                        channel=inbound.channel,
+                        chat_id=inbound.chat_id,
+                        sender_id=inbound.sender_id,
+                        session_id=inbound.session_id,
+                        content=result.content or "",
+                    )
                 )
-            except TimeoutError:
-                continue
-            result = await self.process_direct(
-                inbound.content,
-                inbound.channel,
-                inbound.chat_id,
-                inbound.session_id,
-            )
-            await self._message_bus.publish_outbound(
-                OutboundMessage(
-                    channel=inbound.channel,
-                    chat_id=inbound.chat_id,
-                    sender_id=inbound.sender_id,
-                    session_id=inbound.session_id,
-                    content=result.content or "",
-                )
-            )
+        except asyncio.CancelledError:
+            logger.info("Agent loop cancelled")
+            raise
 
     async def process_direct(
         self,

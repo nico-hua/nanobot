@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
@@ -17,6 +18,8 @@ from .messages import (
     ToolCallRequest,
     ToolMessage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicCompatProvider(LLMProvider):
@@ -51,6 +54,12 @@ class AnthropicCompatProvider(LLMProvider):
         temperature: float | None = None,
     ) -> LLMResponse:
         request = self._build_request(messages, tools, max_tokens, temperature)
+        logger.debug(
+            "Anthropic-compatible completion requested (model=%s, messages=%d, tools=%d)",
+            self.default_model,
+            len(messages),
+            len(tools or ()),
+        )
 
         try:
             response = await self._client.messages.create(**request)
@@ -58,6 +67,7 @@ class AnthropicCompatProvider(LLMProvider):
         except ProviderError:
             raise
         except Exception as exc:
+            logger.exception("Anthropic-compatible completion failed")
             raise ProviderError("Anthropic-compatible completion failed") from exc
 
     async def stream(
@@ -69,6 +79,12 @@ class AnthropicCompatProvider(LLMProvider):
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         request = self._build_request(messages, tools, max_tokens, temperature)
+        logger.debug(
+            "Anthropic-compatible streaming requested (model=%s, messages=%d, tools=%d)",
+            self.default_model,
+            len(messages),
+            len(tools or ()),
+        )
 
         try:
             async with self._client.messages.stream(**request) as stream:
@@ -80,6 +96,7 @@ class AnthropicCompatProvider(LLMProvider):
         except ProviderError:
             raise
         except Exception as exc:
+            logger.exception("Anthropic-compatible streaming failed")
             raise ProviderError("Anthropic-compatible streaming failed") from exc
 
     def _build_request(

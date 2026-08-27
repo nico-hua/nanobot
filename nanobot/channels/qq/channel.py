@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,8 @@ from typing import Any
 from ...bus import InboundMessage, MessageBus, OutboundMessage
 from ...config import QQChannelConfig
 from ..base import BaseChannel
+
+logger = logging.getLogger(__name__)
 
 _C2C = "c2c"
 _GROUP = "group"
@@ -49,11 +52,13 @@ class QQChannel(BaseChannel):
         if self.started:
             return
 
+        logger.info("Starting QQ channel")
         self._client = self._client_factory(self)
         start_result = self._client.start(self.config.app_id, self.config.secret)
         if inspect.isawaitable(start_result):
             self._client_task = asyncio.ensure_future(start_result)
         await super().start()
+        logger.info("QQ channel started")
 
     async def stop(self) -> None:
         """Close the QQ client and wait for its listener task to finish."""
@@ -62,6 +67,7 @@ class QQChannel(BaseChannel):
         task = self._client_task
         self._client = None
         self._client_task = None
+        logger.info("Stopping QQ channel")
         try:
             if client is not None:
                 close_result = client.close()
@@ -76,6 +82,7 @@ class QQChannel(BaseChannel):
                 except asyncio.CancelledError:
                     pass
             await super().stop()
+            logger.info("QQ channel stopped")
 
     async def handle_c2c_message(self, message: Any) -> InboundMessage | None:
         """Convert one qq-botpy C2C message event into an inbound message."""
@@ -146,6 +153,7 @@ class QQChannel(BaseChannel):
         chat_id: str,
     ) -> InboundMessage | None:
         if not self.config.allows_sender(sender_id):
+            logger.warning("Ignored QQ message from a sender outside the allow list")
             return None
 
         content = _required_text(getattr(event, "content", None), "QQ message content")

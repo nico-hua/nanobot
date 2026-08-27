@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Sequence
 
 from ..bus import MessageBus
 from .base import BaseChannel
+
+logger = logging.getLogger(__name__)
 
 
 class ChannelManager:
@@ -64,14 +67,17 @@ class ChannelManager:
     async def start_all(self) -> None:
         """Start all channels and the one outbound dispatcher task."""
 
+        logger.info("Starting channels (count=%d)", len(self._channels))
         for channel in self._channels.values():
             await channel.start()
         if not self.dispatcher_running:
             self._dispatcher_task = asyncio.create_task(self._dispatch_outbound())
+        logger.info("Channel manager started")
 
     async def stop_all(self) -> None:
         """Cancel and await dispatching before stopping all channels."""
 
+        logger.info("Stopping channel manager")
         task = self._dispatcher_task
         self._dispatcher_task = None
         if task is not None:
@@ -83,6 +89,7 @@ class ChannelManager:
 
         for channel in self._channels.values():
             await channel.stop()
+        logger.info("Channel manager stopped")
 
     async def _dispatch_outbound(self) -> None:
         while True:
@@ -96,11 +103,15 @@ class ChannelManager:
             channel = self.get(message.channel)
             if channel is None:
                 self._dispatch_errors.append(f"Unknown channel: {message.channel}")
+                logger.warning("Outbound message discarded for an unknown channel")
                 continue
 
             try:
                 await channel.send(message)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001
+                logger.exception("Failed to send outbound message through a channel")
                 self._dispatch_errors.append(
                     f"Failed to send via channel {message.channel}: {exc}"
                 )
