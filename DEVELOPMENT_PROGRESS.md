@@ -1,10 +1,18 @@
 # 项目开发进度
 
+## 最新运行时与 CLI 入口（2026-08-28）
+
+- [x] 实现 `Application` 运行时组装：共享 `MessageBus`、`ToolRegistry`、MCP 动态工具、`AgentLoop` 与基于 `default_channel` 的 ChannelManager。
+- [x] 为 Application 增加最小任务监督：统一等待停止请求、`AgentLoop.run()` 和 ChannelManager dispatcher；后台任务异常或意外结束时记录日志、关闭其余资源并传播异常。
+- [x] 明确 `ChannelManager.start_all()` 是短暂启动方法；其长期运行的 outbound dispatcher Task 通过只读 `dispatcher_task` 暴露给 Application 监督。
+- [x] 新增 `python -m nanobot` CLI：支持 `--config` 和 `--workspace`，在 SIGINT/SIGTERM 时请求优雅停止，并在启动或运行失败时返回非零退出码。
+- [x] 日志初始化责任移至 CLI/宿主应用：CLI 先初始化 INFO 兜底日志，再按选定 JSON 配置应用最终级别；`Application` 与 `AgentLoop` 不再读取日志配置。
+
 ## 最新配置基础设施（2026-08-28）
 
 - [x] 将非敏感运行配置迁移到 `.nanobot/nanobot.json`：绝对 workspace 路径、`logging.level`、Provider 类型/API base/模型/生成参数、默认 Channel 和 `mcp_servers`。
 - [x] `.env` 只保留 `NANOBOT_API_KEY`、QQ 凭据及临时 live-test 设置；JSON 中的 Provider API key 会被校验拒绝。
-- [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`，并使 `AgentLoop` 从 JSON 初始化日志。
+- [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`。
 - [x] OpenAI-compatible 与 Anthropic-compatible Provider 支持初始化默认 `max_tokens` / `temperature`，单次调用的显式参数优先。
 
 最后更新：2026-08-28
@@ -71,7 +79,7 @@
 - [x] 增加 `QQChannelConfig`：提供 QQ App ID、Secret 和 `allow_from` 用户 OpenID 白名单配置。
 - [x] 增加默认跳过的 QQ → Agent → DeepSeek → 本地工具 → QQ 手工端到端测试：凭据仅从本地 `.env`/环境变量读取，验证模型工具调用、工具结果回传、会话历史和 QQ 文本回复。
 - [x] 增加统一日志基础设施：`nanobot.logging.configure_logging()` 配置包级统一格式与日志级别，默认 `NullHandler` 避免未初始化时的非统一兜底输出。
-- [x] `AgentLoop` 初始化时读取 `.env`/进程环境中的 `NANOBOT_LOG_LEVEL`（环境变量优先、默认 `INFO`），并配置 `nanobot` 命名空间日志。
+- [x] CLI 入口先初始化包级 INFO 兜底日志，再从 `.nanobot/nanobot.json` 的 `logging.level` 配置 `nanobot` 命名空间日志；嵌入式宿主应用可自行选择初始化策略。
 - [x] 在 Agent、Provider、ToolRegistry、MCP、MessageBus、SessionStore 与 Channel 的关键生命周期和异常边界加入不含消息内容、工具参数或凭据的模块级日志；工具/MCP 的意外执行异常保留 traceback，取消信号继续抛出。
 - [x] 新增 `.env.example`、日志 focused tests 与 `AGENTS.md` 的 Logging and Error Handling 开发规范。
 
@@ -80,7 +88,7 @@
 最近一次记录的离线测试结果：
 
 ```text
-Ran 144 tests in 4.815s
+Ran 159 tests in 4.943s
 OK (skipped=7)
 ```
 
@@ -171,7 +179,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 ### 5. 错误和可观测性仍需完善
 
-当前已经有统一的包级日志格式、模块级 logger、日志级别配置和异常 traceback 记录规则；`AgentLoop` 会从 `.env` 读取 `NANOBOT_LOG_LEVEL`，进程环境变量可覆盖它。日志只记录组件名、数量和生命周期等元信息，不记录消息内容、工具参数、文件路径或凭据。
+当前已经有统一的包级日志格式、模块级 logger、JSON 中的日志级别配置和异常 traceback 记录规则；CLI 负责初始化日志，嵌入式宿主应用可自行初始化。日志只记录组件名、数量和生命周期等元信息，不记录消息内容、工具参数、文件路径或凭据。
 
 仍未具备标准化错误类型、错误码、关联请求 ID、结构化日志字段、重试判断、指标、追踪和外部日志后端。
 

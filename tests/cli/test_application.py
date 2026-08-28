@@ -7,7 +7,6 @@ import unittest
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 from nanobot.agent import AgentRunner
 from nanobot.bus import MessageBus
@@ -171,23 +170,6 @@ class FakeChannelManager:
 
 
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
-    def test_initialization_configures_logging_from_json_config(self) -> None:
-        with patch("nanobot.cli.application.configure_logging_from_config") as configure_logging:
-            Application(
-                _config(),
-                provider_factory=lambda config: FakeProvider(),
-                channel_factory=lambda name, bus, config: RecordingChannel(name, bus, []),
-                mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
-                    registry,
-                    servers,
-                    [],
-                ),
-                tool_loader=NoopToolLoader(),
-                agent_loop_factory=lambda runner, provider, registry, bus: RecordingLoop([]),
-            )
-
-        configure_logging.assert_called_once_with()
-
     async def test_assembles_shared_dependencies_and_closes_in_reverse_order(self) -> None:
         events: list[str] = []
         channel: RecordingChannel | None = None

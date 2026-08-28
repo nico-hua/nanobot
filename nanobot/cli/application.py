@@ -11,7 +11,6 @@ from ..agent import AgentLoop, AgentRunner
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, QQChannel
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
-from ..logging import configure_logging_from_config
 from ..mcp import MCPProvider
 from ..providers import AnthropicCompatProvider, LLMProvider, OpenAICompatProvider
 from ..tools import ToolContext, ToolLoader, ToolRegistry
@@ -44,7 +43,6 @@ class Application:
         if config.workspace is None:
             raise ValueError("Application requires a configured workspace")
 
-        configure_logging_from_config()
         self._config = config
         provider_factory = provider_factory or _create_provider
         channel_factory = channel_factory or _create_channel

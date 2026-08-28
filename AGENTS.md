@@ -72,12 +72,14 @@ Do not claim a task is complete if the relevant tests are failing.
 
 # Logging and Error Handling
 
-- `Application` initializes package logging with
-  `nanobot.logging.configure_logging_from_config()` during construction. Set
+- The CLI entry point initializes package logging with
+  `nanobot.logging.configure_logging()` before configuration loading, then
+  `configure_logging_from_config()` after Application creation. Set
   `logging.level` in `.nanobot/nanobot.json`; it defaults to `INFO`, and a
-  missing configuration file also falls back to `INFO`. The setup only
-  configures the `nanobot` logger and does not modify the host application's
-  root logger.
+  missing configuration file also falls back to `INFO`. A host application
+  embedding `Application` must initialize package logging itself. The setup
+  only configures the `nanobot` logger and does not modify the host
+  application's root logger.
 - Runtime modules that log must create a module-level logger with
   `logging.getLogger(__name__)`. Do not use `print` for runtime diagnostics.
 - Use `DEBUG` for bounded diagnostic metadata, `INFO` for major lifecycle
