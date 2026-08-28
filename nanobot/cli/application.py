@@ -70,6 +70,7 @@ class Application:
         channel = channel_factory(config.default_channel, self._message_bus, config)
         self._channel_manager = channel_manager_factory(self._message_bus, (channel,))
         self._agent_task: asyncio.Task[None] | None = None
+        self._channel_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._close_lock = asyncio.Lock()
         self._started = False
@@ -117,19 +118,42 @@ class Application:
 
         return self._agent_task
 
+    @property
+    def channel_task(self) -> asyncio.Task[None] | None:
+        """Return the ChannelManager dispatcher task while it is supervised."""
+
+        return self._channel_task
+
     async def run(self) -> None:
-        """Start components and wait until ``request_stop`` or cancellation."""
+        """Run until stopped, cancelled, or a supervised task stops."""
 
         await self.start()
+        stop_task = asyncio.create_task(self._stop_event.wait())
         try:
-            await self._stop_event.wait()
+            done, _ = await asyncio.wait(
+                (stop_task, *self._runtime_tasks()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if stop_task not in done:
+                self._raise_for_stopped_runtime_task(done)
         except asyncio.CancelledError:
             await self.close()
             raise
-        await self.close()
+        except Exception:
+            await self.close()
+            raise
+        else:
+            await self.close()
+        finally:
+            if not stop_task.done():
+                stop_task.cancel()
+                try:
+                    await stop_task
+                except asyncio.CancelledError:
+                    pass
 
     async def start(self) -> None:
-        """Connect MCP, then start the loop task and ChannelManager once."""
+        """Perform short startup and schedule the long-running tasks once."""
 
         if self._closed:
             raise RuntimeError("Application has already been closed")
@@ -144,6 +168,9 @@ class Application:
                 logger.warning("Some MCP servers failed to connect (count=%d)", failures)
             self._agent_task = asyncio.create_task(self._agent_loop.run())
             await self._channel_manager.start_all()
+            self._channel_task = self._channel_manager.dispatcher_task
+            if self._channel_task is None:
+                raise RuntimeError("ChannelManager did not create a dispatcher task")
         except asyncio.CancelledError:
             await self.close()
             raise
@@ -171,22 +198,58 @@ class Application:
             logger.info("Application stopping")
             try:
                 await self._channel_manager.stop_all()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Application failed while stopping the ChannelManager")
             finally:
+                self._channel_task = None
                 await self._cancel_agent_task()
-                await self._mcp_provider.close()
+                try:
+                    await self._mcp_provider.close()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Application failed while closing MCP connections")
             self._started = False
             logger.info("Application stopped")
 
     async def _cancel_agent_task(self) -> None:
         task = self._agent_task
         self._agent_task = None
-        if task is None:
+        if task is None or task.done():
             return
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+
+    def _runtime_tasks(self) -> tuple[asyncio.Task[None], asyncio.Task[None]]:
+        if self._agent_task is None or self._channel_task is None:
+            raise RuntimeError("Application runtime tasks have not been started")
+        return self._agent_task, self._channel_task
+
+    def _raise_for_stopped_runtime_task(
+        self,
+        completed_tasks: set[asyncio.Task[object]],
+    ) -> None:
+        for component_name, task in (
+            ("AgentLoop", self._agent_task),
+            ("ChannelManager", self._channel_task),
+        ):
+            if task is None or task not in completed_tasks:
+                continue
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.info("Application background task was cancelled (component=%s)", component_name)
+                raise
+            except Exception:
+                logger.exception("Application background task failed (component=%s)", component_name)
+                raise
+            logger.error("Application background task stopped unexpectedly (component=%s)", component_name)
+            raise RuntimeError(f"{component_name} stopped unexpectedly")
 
 
 def _create_provider(config: ProviderConfig) -> LLMProvider:

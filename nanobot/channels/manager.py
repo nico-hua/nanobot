@@ -43,6 +43,12 @@ class ChannelManager:
         return self._dispatcher_task is not None and not self._dispatcher_task.done()
 
     @property
+    def dispatcher_task(self) -> asyncio.Task[None] | None:
+        """Return the outbound dispatcher task managed by this instance."""
+
+        return self._dispatcher_task
+
+    @property
     def dispatch_errors(self) -> tuple[str, ...]:
         """Return unknown-channel and delivery errors in occurrence order."""
 
@@ -65,7 +71,7 @@ class ChannelManager:
         return self._channels.get(name)
 
     async def start_all(self) -> None:
-        """Start all channels and the one outbound dispatcher task."""
+        """Start channels, schedule the dispatcher, and return after setup."""
 
         logger.info("Starting channels (count=%d)", len(self._channels))
         for channel in self._channels.values():

@@ -71,14 +71,25 @@ class RecordingLoop:
         self.events = events
         self.started = asyncio.Event()
         self.message_bus: MessageBus | None = None
+        self._finish = asyncio.Event()
+        self._error: Exception | None = None
 
     async def run(self) -> None:
         self.events.append("loop.start")
         self.started.set()
         try:
-            await asyncio.Future()
+            await self._finish.wait()
+            if self._error is not None:
+                raise self._error
         finally:
             self.events.append("loop.close")
+
+    def fail(self, error: Exception) -> None:
+        self._error = error
+        self._finish.set()
+
+    def finish(self) -> None:
+        self._finish.set()
 
 
 class RecordingChannel(FakeChannel):
@@ -100,6 +111,63 @@ class FailingChannel(RecordingChannel):
         await super().start()
         await asyncio.sleep(0)
         raise RuntimeError("channel unavailable")
+
+
+class FakeChannelManager:
+    """A ChannelManager double with one controllable long-running task."""
+
+    def __init__(
+        self,
+        message_bus: MessageBus,
+        channels: tuple[BaseChannel, ...],
+        events: list[str],
+        *,
+        start_error: Exception | None = None,
+    ) -> None:
+        self.message_bus = message_bus
+        self.channels = channels
+        self.events = events
+        self.start_error = start_error
+        self.background_started = asyncio.Event()
+        self._finish = asyncio.Event()
+        self._error: Exception | None = None
+        self._dispatcher_task: asyncio.Task[None] | None = None
+        self.stop_calls = 0
+
+    @property
+    def dispatcher_task(self) -> asyncio.Task[None] | None:
+        return self._dispatcher_task
+
+    async def start_all(self) -> None:
+        self.events.append("channel_manager.start")
+        if self.start_error is not None:
+            await asyncio.sleep(0)
+            raise self.start_error
+        self._dispatcher_task = asyncio.create_task(self._run_dispatcher())
+        await self.background_started.wait()
+
+    async def stop_all(self) -> None:
+        self.events.append("channel_manager.stop")
+        self.stop_calls += 1
+        task = self._dispatcher_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    def fail(self, error: Exception) -> None:
+        self._error = error
+        self._finish.set()
+
+    async def _run_dispatcher(self) -> None:
+        self.events.append("channel_manager.task.start")
+        self.background_started.set()
+        await self._finish.wait()
+        if self._error is not None:
+            raise self._error
 
 
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
@@ -236,6 +304,98 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events[-3:], ["channel.close", "loop.close", "mcp.close"])
 
+    async def test_start_returns_while_the_background_tasks_keep_running(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(events, loop)
+
+        await asyncio.wait_for(app.start(), timeout=0.1)
+        await asyncio.wait_for(loop.started.wait(), timeout=0.1)
+
+        self.assertTrue(manager.background_started.is_set())
+        self.assertFalse(app.agent_task.done() if app.agent_task is not None else True)
+        self.assertFalse(app.channel_task.done() if app.channel_task is not None else True)
+
+        await app.close()
+
+    async def test_agent_loop_failure_stops_the_application(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(events, loop)
+
+        run_task = asyncio.create_task(app.run())
+        await asyncio.wait_for(loop.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.background_started.wait(), timeout=1)
+        loop.fail(RuntimeError("agent loop failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "agent loop failed"):
+            await asyncio.wait_for(run_task, timeout=1)
+
+        self.assertEqual(events[-3:], ["loop.close", "channel_manager.stop", "mcp.close"])
+        self.assertEqual(manager.stop_calls, 1)
+
+    async def test_channel_manager_failure_stops_the_application(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(events, loop)
+
+        run_task = asyncio.create_task(app.run())
+        await asyncio.wait_for(loop.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.background_started.wait(), timeout=1)
+        manager.fail(RuntimeError("dispatcher failed"))
+
+        with self.assertRaisesRegex(RuntimeError, "dispatcher failed"):
+            await asyncio.wait_for(run_task, timeout=1)
+
+        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+
+    async def test_unexpected_agent_loop_completion_stops_the_application(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(events, loop)
+
+        run_task = asyncio.create_task(app.run())
+        await asyncio.wait_for(loop.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.background_started.wait(), timeout=1)
+        loop.finish()
+
+        with self.assertRaisesRegex(RuntimeError, "AgentLoop stopped unexpectedly"):
+            await asyncio.wait_for(run_task, timeout=1)
+
+        self.assertEqual(events[-3:], ["loop.close", "channel_manager.stop", "mcp.close"])
+
+    async def test_start_failure_releases_started_agent_and_mcp_resources(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(
+            events,
+            loop,
+            manager_start_error=RuntimeError("channel manager unavailable"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "channel manager unavailable"):
+            await app.start()
+
+        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+        self.assertEqual(manager.stop_calls, 1)
+        self.assertIsNone(app.agent_task)
+
+    async def test_cancelling_run_closes_all_resources(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        app, manager = _fake_application(events, loop)
+
+        run_task = asyncio.create_task(app.run())
+        await asyncio.wait_for(loop.started.wait(), timeout=1)
+        await asyncio.wait_for(manager.background_started.wait(), timeout=1)
+        run_task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(run_task, timeout=1)
+
+        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+        self.assertEqual(manager.stop_calls, 1)
+
 
 def _config() -> NanobotConfig:
     return NanobotConfig(
@@ -254,3 +414,40 @@ def _config() -> NanobotConfig:
 def _configure_loop(loop: RecordingLoop, message_bus: MessageBus) -> RecordingLoop:
     loop.message_bus = message_bus
     return loop
+
+
+def _fake_application(
+    events: list[str],
+    loop: RecordingLoop,
+    *,
+    manager_start_error: Exception | None = None,
+) -> tuple[Application, FakeChannelManager]:
+    managers: list[FakeChannelManager] = []
+
+    def manager_factory(
+        message_bus: MessageBus,
+        channels: tuple[BaseChannel, ...],
+    ) -> FakeChannelManager:
+        manager = FakeChannelManager(
+            message_bus,
+            channels,
+            events,
+            start_error=manager_start_error,
+        )
+        managers.append(manager)
+        return manager
+
+    app = Application(
+        _config(),
+        provider_factory=lambda config: FakeProvider(),
+        channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
+        mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
+            registry,
+            servers,
+            events,
+        ),
+        tool_loader=NoopToolLoader(),
+        agent_loop_factory=lambda runner, provider, registry, bus: _configure_loop(loop, bus),
+        channel_manager_factory=manager_factory,
+    )
+    return app, managers[0]
