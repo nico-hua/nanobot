@@ -110,7 +110,7 @@ class ChannelManager:
                 await channel.send(message)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.exception("Failed to send outbound message through a channel")
                 self._dispatch_errors.append(
                     f"Failed to send via channel {message.channel}: {exc}"

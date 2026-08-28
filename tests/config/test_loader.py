@@ -56,6 +56,40 @@ class ConfigLoaderTest(unittest.TestCase):
 
         self.assertEqual(config.provider.api_key, "process-key")
 
+    def test_loads_optional_qq_credentials_from_dotenv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory))
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                "\n".join(
+                    (
+                        "NANOBOT_API_KEY=test-key",
+                        "NANOBOT_QQ_APP_ID=test-app-id",
+                        "NANOBOT_QQ_SECRET=test-secret",
+                        "NANOBOT_QQ_ALLOW_FROM=user-1, user-2",
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_nanobot_config(config_path, env_path)
+
+        self.assertIsNotNone(config.qq)
+        self.assertEqual(config.qq.app_id if config.qq else None, "test-app-id")
+        self.assertEqual(config.qq.allow_from if config.qq else None, ["user-1", "user-2"])
+
+    def test_rejects_incomplete_qq_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory))
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                "NANOBOT_API_KEY=test-key\nNANOBOT_QQ_APP_ID=test-app-id\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "QQ configuration"):
+                load_nanobot_config(config_path, env_path)
+
     def test_rejects_missing_api_key_and_sensitive_json_field(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             directory_path = Path(directory)

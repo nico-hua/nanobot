@@ -5,7 +5,6 @@ from __future__ import annotations
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
-from unittest.mock import patch
 
 from nanobot.agent import (
     AgentLoop,
@@ -83,14 +82,6 @@ class FailingRunner(AgentRunner):
 
 
 class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
-    def test_initialization_configures_logging_from_json_config(self) -> None:
-        provider = ScriptedProvider((LLMResponse(content="Hello."),))
-
-        with patch("nanobot.agent.loop.configure_logging_from_config") as configure_logging:
-            AgentLoop(AgentRunner(), provider, ToolRegistry())
-
-        configure_logging.assert_called_once_with()
-
     async def test_passes_the_user_message_to_the_runner(self) -> None:
         provider = ScriptedProvider((LLMResponse(content="Hello."),))
         session_store = SessionStore()

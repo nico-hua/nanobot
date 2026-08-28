@@ -7,7 +7,6 @@ import logging
 from collections.abc import Sequence
 
 from ..bus import MessageBus, OutboundMessage
-from ..logging import configure_logging_from_config
 from ..providers import BaseMessage, HumanMessage, LLMProvider
 from ..tools import ToolRegistry
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
@@ -50,7 +49,6 @@ class AgentLoop:
         session_store: SessionStore | None = None,
         message_bus: MessageBus | None = None,
     ) -> None:
-        configure_logging_from_config()
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
         if not isinstance(provider, LLMProvider):

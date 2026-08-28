@@ -8,11 +8,19 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .schema import NanobotConfig, NanobotFileConfig, ProviderConfig
+from .schema import (
+    NanobotConfig,
+    NanobotFileConfig,
+    ProviderConfig,
+    QQChannelConfig,
+)
 
 DEFAULT_CONFIG_PATH = Path(".nanobot/nanobot.json")
 DEFAULT_ENV_PATH = Path(".env")
 _API_KEY_ENV_VAR = "NANOBOT_API_KEY"
+_QQ_APP_ID_ENV_VAR = "NANOBOT_QQ_APP_ID"
+_QQ_SECRET_ENV_VAR = "NANOBOT_QQ_SECRET"
+_QQ_ALLOW_FROM_ENV_VAR = "NANOBOT_QQ_ALLOW_FROM"
 
 
 class ConfigError(ValueError):
@@ -63,6 +71,7 @@ def load_nanobot_config(
         workspace=workspace,
         default_channel=file_config.default_channel,
         mcp_servers=file_config.mcp_servers,
+        qq=_load_qq_config(env_path),
         provider=ProviderConfig(
             api_key=api_key,
             **file_config.provider.model_dump(),
@@ -90,3 +99,27 @@ def get_env_value(name: str, env_path: str | Path = DEFAULT_ENV_PATH) -> str | N
         if separator and key.strip() == name:
             return file_value.strip().strip("\"'")
     return None
+
+
+def _load_qq_config(env_path: str | Path) -> QQChannelConfig | None:
+    app_id = get_env_value(_QQ_APP_ID_ENV_VAR, env_path)
+    secret = get_env_value(_QQ_SECRET_ENV_VAR, env_path)
+    if not app_id and not secret:
+        return None
+    if not app_id or not secret:
+        raise ConfigError("QQ configuration requires both app ID and secret")
+
+    allow_from = get_env_value(_QQ_ALLOW_FROM_ENV_VAR, env_path) or "*"
+    allowed_senders = [
+        sender_id.strip()
+        for sender_id in allow_from.split(",")
+        if sender_id.strip()
+    ]
+    try:
+        return QQChannelConfig(
+            app_id=app_id,
+            secret=secret,
+            allow_from=allowed_senders or ["*"],
+        )
+    except ValidationError as exc:
+        raise ConfigError("QQ configuration does not match the expected schema") from exc

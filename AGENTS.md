@@ -72,7 +72,7 @@ Do not claim a task is complete if the relevant tests are failing.
 
 # Logging and Error Handling
 
-- `AgentLoop` initializes package logging with
+- `Application` initializes package logging with
   `nanobot.logging.configure_logging_from_config()` during construction. Set
   `logging.level` in `.nanobot/nanobot.json`; it defaults to `INFO`, and a
   missing configuration file also falls back to `INFO`. The setup only

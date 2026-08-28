@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 from nanobot.logging import (
