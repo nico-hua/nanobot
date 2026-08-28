@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 import unittest
+import json
 from pathlib import Path
-from unittest.mock import patch
 
 from nanobot.logging import (
     DEFAULT_LOG_FORMAT,
-    LOG_LEVEL_ENV_VAR,
     configure_logging,
-    configure_logging_from_env,
+    configure_logging_from_config,
 )
 
 
@@ -70,24 +68,26 @@ class LoggingConfigurationTest(unittest.TestCase):
         self.assertIn("Traceback", output)
         self.assertIn("RuntimeError: expected failure", output)
 
-    def test_configures_from_dotenv_and_defaults_to_info(self) -> None:
+    def test_configures_from_json_and_defaults_to_info_when_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            env_path = Path(directory) / ".env"
-            env_path.write_text(f"{LOG_LEVEL_ENV_VAR}=DEBUG\n", encoding="utf-8")
-            with patch.dict(os.environ, {}, clear=True):
-                configured = configure_logging_from_env(env_path)
-                self.assertEqual(configured.level, logging.DEBUG)
+            config_path = Path(directory) / "nanobot.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "workspace": "workspace",
+                        "logging": {"level": "DEBUG"},
+                        "provider": {
+                            "type": "openai_compat",
+                            "api_base": "https://example.test/v1",
+                            "model": "test-model",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            configured = configure_logging_from_config(config_path)
+            self.assertEqual(configured.level, logging.DEBUG)
 
-            missing_path = Path(directory) / "missing.env"
-            with patch.dict(os.environ, {}, clear=True):
-                configured = configure_logging_from_env(missing_path)
-                self.assertEqual(configured.level, logging.INFO)
-
-    def test_process_environment_overrides_dotenv_log_level(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            env_path = Path(directory) / ".env"
-            env_path.write_text(f"{LOG_LEVEL_ENV_VAR}=DEBUG\n", encoding="utf-8")
-            with patch.dict(os.environ, {LOG_LEVEL_ENV_VAR: "ERROR"}, clear=True):
-                configured = configure_logging_from_env(env_path)
-
-        self.assertEqual(configured.level, logging.ERROR)
+            missing_path = Path(directory) / "missing.json"
+            configured = configure_logging_from_config(missing_path)
+            self.assertEqual(configured.level, logging.INFO)

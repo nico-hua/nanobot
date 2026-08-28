@@ -7,13 +7,12 @@ unittest:
 * ``NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS=1``
 * ``NANOBOT_QQ_APP_ID``
 * ``NANOBOT_QQ_SECRET``
-* ``NANOBOT_DEEPSEEK_API_KEY`` (or the existing ``DEEPSEEK_API_KEY``)
+* ``NANOBOT_API_KEY``
+* a valid ``.nanobot/nanobot.json`` with an ``openai_compat`` provider
 
 Optional variables:
 
 * ``NANOBOT_QQ_ALLOW_FROM``: comma-separated QQ user openids; defaults to ``*``
-* ``NANOBOT_DEEPSEEK_API_BASE``: defaults to ``https://api.deepseek.com``
-* ``NANOBOT_DEEPSEEK_MODEL``: defaults to ``deepseek-chat``
 * ``NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS``: defaults to ``180``
 
 After the test starts, send the QQ bot this message through C2C or a group
@@ -25,7 +24,6 @@ background tasks and the QQ client.
 from __future__ import annotations
 
 import asyncio
-import os
 import unittest
 from collections.abc import Sequence
 from contextlib import suppress
@@ -35,7 +33,12 @@ from nanobot.agent import AgentLoop, AgentRunner, SessionStore
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager
 from nanobot.channels.qq import QQChannel
-from nanobot.config import QQChannelConfig
+from nanobot.config import (
+    ConfigError,
+    QQChannelConfig,
+    get_env_value,
+    load_nanobot_config,
+)
 from nanobot.providers import (
     BaseMessage,
     OpenAICompatProvider,
@@ -44,22 +47,13 @@ from nanobot.providers import (
 )
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
-_RUN_LIVE_TESTS = os.getenv("NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS") == "1"
-_QQ_APP_ID = os.getenv("NANOBOT_QQ_APP_ID")
-_QQ_SECRET = os.getenv("NANOBOT_QQ_SECRET")
-_QQ_ALLOW_FROM = os.getenv("NANOBOT_QQ_ALLOW_FROM", "*")
-_DEEPSEEK_API_KEY = os.getenv("NANOBOT_DEEPSEEK_API_KEY") or os.getenv(
-    "DEEPSEEK_API_KEY"
+_RUN_LIVE_TESTS = get_env_value("NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS") == "1"
+_QQ_APP_ID = get_env_value("NANOBOT_QQ_APP_ID")
+_QQ_SECRET = get_env_value("NANOBOT_QQ_SECRET")
+_QQ_ALLOW_FROM = get_env_value("NANOBOT_QQ_ALLOW_FROM") or "*"
+_TIMEOUT_SECONDS = float(
+    get_env_value("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS") or "180"
 )
-_DEEPSEEK_API_BASE = os.getenv(
-    "NANOBOT_DEEPSEEK_API_BASE",
-    os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com"),
-)
-_DEEPSEEK_MODEL = os.getenv(
-    "NANOBOT_DEEPSEEK_MODEL",
-    os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-)
-_TIMEOUT_SECONDS = float(os.getenv("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS", "180"))
 
 
 class _PromptedSessionStore(SessionStore):
@@ -124,12 +118,16 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
     """Exercise the real Channel, Bus, Loop, Runner, Provider, and tool chain."""
 
     async def asyncSetUp(self) -> None:
+        try:
+            config = load_nanobot_config()
+        except ConfigError as exc:
+            self.skipTest(f"Unable to load runtime configuration: {exc}")
+
         missing = [
             name
             for name, value in (
                 ("NANOBOT_QQ_APP_ID", _QQ_APP_ID),
                 ("NANOBOT_QQ_SECRET", _QQ_SECRET),
-                ("NANOBOT_DEEPSEEK_API_KEY or DEEPSEEK_API_KEY", _DEEPSEEK_API_KEY),
             )
             if not value
         ]
@@ -137,6 +135,8 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
             self.skipTest(f"Missing required live-test environment variables: {', '.join(missing)}")
         if _TIMEOUT_SECONDS <= 0:
             self.skipTest("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS must be positive")
+        if config.provider.type != "openai_compat":
+            self.skipTest("The QQ DeepSeek live test requires an openai_compat provider")
 
         self._bus = MessageBus()
         self._sessions = _PromptedSessionStore()
@@ -154,9 +154,11 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
         self._loop = AgentLoop(
             runner=AgentRunner(),
             provider=OpenAICompatProvider(
-                api_key=_DEEPSEEK_API_KEY or "",
-                api_base=_DEEPSEEK_API_BASE,
-                default_model=_DEEPSEEK_MODEL,
+                api_key=config.provider.api_key,
+                api_base=config.provider.api_base,
+                default_model=config.provider.default_model,
+                default_max_tokens=config.provider.default_max_tokens,
+                default_temperature=config.provider.default_temperature,
             ),
             tool_registry=ToolRegistry((self._weather,)),
             session_store=self._sessions,

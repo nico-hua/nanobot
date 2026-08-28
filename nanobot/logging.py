@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
+
+from .config import DEFAULT_CONFIG_PATH, load_file_config
 
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_LOG_LEVEL = "INFO"
-LOG_LEVEL_ENV_VAR = "NANOBOT_LOG_LEVEL"
 _HANDLER_MARKER = "_nanobot_default_handler"
 
 
@@ -43,19 +43,19 @@ def configure_logging(level: int | str = logging.INFO) -> logging.Logger:
     return package_logger
 
 
-def configure_logging_from_env(
-    env_path: str | Path = ".env",
+def configure_logging_from_config(
+    config_path: str | Path = DEFAULT_CONFIG_PATH,
 ) -> logging.Logger:
-    """Configure logging from ``NANOBOT_LOG_LEVEL`` in env or a local .env file.
+    """Configure logging from the non-sensitive JSON configuration file.
 
-    A process environment variable takes precedence over the local file. The
-    fallback is ``INFO`` when neither source provides a value.
+    The fallback is ``INFO`` when the configuration file has not yet been
+    created. Invalid existing configuration remains an explicit error.
     """
 
-    level = os.environ.get(LOG_LEVEL_ENV_VAR)
-    if level is None:
-        level = _read_env_value(Path(env_path), LOG_LEVEL_ENV_VAR)
-    return configure_logging(level or DEFAULT_LOG_LEVEL)
+    path = Path(config_path)
+    if not path.is_file():
+        return configure_logging(DEFAULT_LOG_LEVEL)
+    return configure_logging(load_file_config(path).logging.level)
 
 
 def _resolve_level(level: int | str) -> int:
@@ -69,19 +69,3 @@ def _resolve_level(level: int | str) -> int:
             return resolved
         raise ValueError(f"Unknown logging level: {level}")
     raise TypeError("Logging level must be an integer or level name")
-
-
-def _read_env_value(path: Path, name: str) -> str | None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return None
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        key, separator, value = stripped.partition("=")
-        if separator and key.strip() == name:
-            return value.strip().strip("\"'")
-    return None

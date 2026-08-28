@@ -24,11 +24,15 @@ class OpenAICompatProvider(LLMProvider):
         api_key: str,
         api_base: str,
         default_model: str,
+        default_max_tokens: int | None = None,
+        default_temperature: float | None = None,
         *,
         client: Any | None = None,
     ) -> None:
         self.api_base = api_base
         self.default_model = default_model
+        self.default_max_tokens = default_max_tokens
+        self.default_temperature = default_temperature
         self._client = client if client is not None else AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
@@ -132,10 +136,16 @@ class OpenAICompatProvider(LLMProvider):
         }
         if tools is not None:
             request["tools"] = [tool.to_openai_tool() for tool in tools]
-        if max_tokens is not None:
-            request["max_tokens"] = max_tokens
-        if temperature is not None:
-            request["temperature"] = temperature
+        resolved_max_tokens = (
+            max_tokens if max_tokens is not None else self.default_max_tokens
+        )
+        if resolved_max_tokens is not None:
+            request["max_tokens"] = resolved_max_tokens
+        resolved_temperature = (
+            temperature if temperature is not None else self.default_temperature
+        )
+        if resolved_temperature is not None:
+            request["temperature"] = resolved_temperature
         return request
 
 

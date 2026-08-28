@@ -5,6 +5,7 @@ import unittest
 from pydantic import ValidationError
 
 from nanobot.config import MCPServerConfig, QQChannelConfig
+from nanobot.config.schema import NanobotConfig, ProviderConfig
 
 
 class MCPServerConfigTest(unittest.TestCase):
@@ -70,3 +71,40 @@ class QQChannelConfigTest(unittest.TestCase):
             QQChannelConfig(app_id="", secret="secret")
         with self.assertRaises(ValidationError):
             QQChannelConfig(app_id="app", secret="secret", allow_from=["*", "user-1"])
+
+
+class ProviderConfigTest(unittest.TestCase):
+    def test_defaults_generation_settings(self) -> None:
+        config = ProviderConfig(
+            type="openai_compat",
+            api_key="test-key",
+            api_base="https://example.test/v1",
+            default_model="test-model",
+        )
+
+        self.assertEqual(config.default_max_tokens, 1024)
+        self.assertEqual(config.default_temperature, 0.7)
+
+    def test_rejects_temperature_outside_supported_range(self) -> None:
+        with self.assertRaises(ValidationError):
+            ProviderConfig(
+                type="openai_compat",
+                api_key="test-key",
+                api_base="https://example.test/v1",
+                default_model="test-model",
+                default_temperature=2.1,
+            )
+
+
+class NanobotConfigTest(unittest.TestCase):
+    def test_defaults_to_qq_as_the_selected_channel(self) -> None:
+        config = NanobotConfig(
+            provider=ProviderConfig(
+                type="openai_compat",
+                api_key="test-key",
+                api_base="https://example.test/v1",
+                default_model="test-model",
+            )
+        )
+
+        self.assertEqual(config.default_channel, "qq")

@@ -1,6 +1,13 @@
 # 项目开发进度
 
-最后更新：2026-08-27
+## 最新配置基础设施（2026-08-28）
+
+- [x] 将非敏感运行配置迁移到 `.nanobot/nanobot.json`：绝对 workspace 路径、`logging.level`、Provider 类型/API base/模型/生成参数、默认 Channel 和 `mcp_servers`。
+- [x] `.env` 只保留 `NANOBOT_API_KEY`、QQ 凭据及临时 live-test 设置；JSON 中的 Provider API key 会被校验拒绝。
+- [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`，并使 `AgentLoop` 从 JSON 初始化日志。
+- [x] OpenAI-compatible 与 Anthropic-compatible Provider 支持初始化默认 `max_tokens` / `temperature`，单次调用的显式参数优先。
+
+最后更新：2026-08-28
 
 ## 项目目标
 
@@ -73,7 +80,7 @@
 最近一次记录的离线测试结果：
 
 ```text
-Ran 137 tests in 4.002s
+Ran 144 tests in 4.815s
 OK (skipped=7)
 ```
 

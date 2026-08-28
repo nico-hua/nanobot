@@ -1,0 +1,17 @@
+{
+    "workspace":  "D:\\Github Project\\nanobot\\.nanobot\\workspace",
+    "logging":  {
+                    "level":  "INFO"
+                },
+    "provider":  {
+                     "type":  "openai_compat",
+                     "api_base":  "https://api.deepseek.com",
+                     "model":  "deepseek-v4-flash",
+                     "max_tokens":  1024,
+                     "temperature":  0.7
+                 },
+    "default_channel":  "qq",
+    "mcp_servers":  {
+
+                    }
+}

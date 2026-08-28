@@ -143,6 +143,23 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.tool_calls[0].arguments, {"city": "Beijing"})
         self.assertEqual(result.usage, TokenUsage(prompt_tokens=4, completion_tokens=2, total_tokens=6))
 
+    async def test_complete_uses_configured_generation_defaults(self) -> None:
+        client = FakeClient(completion_response())
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            default_max_tokens=64,
+            default_temperature=0.3,
+            client=client,
+        )
+
+        await provider.complete((HumanMessage(content="Hello"),))
+
+        request = client.completions.requests[0]
+        self.assertEqual(request["max_tokens"], 64)
+        self.assertEqual(request["temperature"], 0.3)
+
     async def test_stream_emits_text_deltas_and_accumulates_tool_calls(self) -> None:
         chunks = (
             SimpleNamespace(

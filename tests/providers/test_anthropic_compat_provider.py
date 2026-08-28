@@ -148,6 +148,24 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.finish_reason, "tool_use")
         self.assertEqual(result.usage, TokenUsage(5, 3, 8))
 
+    async def test_complete_uses_configured_generation_defaults(self) -> None:
+        response = message_response((SimpleNamespace(type="text", text="hello"),))
+        client = FakeClient(response)
+        provider = AnthropicCompatProvider(
+            "test-key",
+            "https://example.test/anthropic",
+            "test-model",
+            default_max_tokens=64,
+            default_temperature=0.3,
+            client=client,
+        )
+
+        await provider.complete((HumanMessage(content="Hello"),))
+
+        request = client.messages.create_requests[0]
+        self.assertEqual(request["max_tokens"], 64)
+        self.assertEqual(request["temperature"], 0.3)
+
     async def test_stream_emits_deltas_and_returns_final_response(self) -> None:
         response = message_response((SimpleNamespace(type="text", text="Hello"),))
         client = FakeClient(response, ("Hel", "lo"))

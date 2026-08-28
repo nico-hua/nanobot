@@ -83,10 +83,10 @@ class FailingRunner(AgentRunner):
 
 
 class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
-    def test_initialization_configures_logging_from_dotenv(self) -> None:
+    def test_initialization_configures_logging_from_json_config(self) -> None:
         provider = ScriptedProvider((LLMResponse(content="Hello."),))
 
-        with patch("nanobot.agent.loop.configure_logging_from_env") as configure_logging:
+        with patch("nanobot.agent.loop.configure_logging_from_config") as configure_logging:
             AgentLoop(AgentRunner(), provider, ToolRegistry())
 
         configure_logging.assert_called_once_with()

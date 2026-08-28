@@ -73,10 +73,11 @@ Do not claim a task is complete if the relevant tests are failing.
 # Logging and Error Handling
 
 - `AgentLoop` initializes package logging with
-  `nanobot.logging.configure_logging_from_env()` during construction. Set
-  `NANOBOT_LOG_LEVEL` in `.env` (or the process environment, which takes
-  precedence); it defaults to `INFO`. The setup only configures the `nanobot`
-  logger and does not modify the host application's root logger.
+  `nanobot.logging.configure_logging_from_config()` during construction. Set
+  `logging.level` in `.nanobot/nanobot.json`; it defaults to `INFO`, and a
+  missing configuration file also falls back to `INFO`. The setup only
+  configures the `nanobot` logger and does not modify the host application's
+  root logger.
 - Runtime modules that log must create a module-level logger with
   `logging.getLogger(__name__)`. Do not use `print` for runtime diagnostics.
 - Use `DEBUG` for bounded diagnostic metadata, `INFO` for major lifecycle

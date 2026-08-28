@@ -5,9 +5,69 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 MCPTransportType = Literal["stdio", "sse", "streamableHttp"]
+ProviderType = Literal["openai_compat", "anthropic_compat"]
+LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+
+class LoggingConfig(BaseModel):
+    """Non-sensitive logging settings stored in ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: LogLevel = "INFO"
+
+
+class ProviderSettingsConfig(BaseModel):
+    """Non-sensitive provider settings stored in ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    type: ProviderType
+    api_base: str
+    default_model: str = Field(
+        validation_alias=AliasChoices("model", "default_model"),
+    )
+    default_max_tokens: int = Field(
+        default=1024,
+        gt=0,
+        validation_alias=AliasChoices("max_tokens", "default_max_tokens"),
+    )
+    default_temperature: float = Field(
+        default=0.7,
+        ge=0,
+        le=2,
+        validation_alias=AliasChoices("temperature", "default_temperature"),
+    )
+
+    @field_validator("api_base", "default_model")
+    @classmethod
+    def _reject_blank_values(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class ProviderConfig(ProviderSettingsConfig):
+    """Resolved provider configuration, including the API key from ``.env``."""
+
+    api_key: str
+
+    @field_validator("api_key")
+    @classmethod
+    def _reject_blank_api_key(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
 
 
 class QQChannelConfig(BaseModel):
@@ -17,6 +77,7 @@ class QQChannelConfig(BaseModel):
 
     app_id: str
     secret: str
+    enabled: bool = True
     allow_from: list[str] = Field(default_factory=lambda: ["*"])
 
     @field_validator("app_id", "secret")
@@ -92,3 +153,34 @@ class MCPServerConfig(BaseModel):
         """Return whether a server tool should be registered."""
 
         return self.enabled_tools == ["*"] or tool_name in self.enabled_tools
+
+
+class NanobotFileConfig(BaseModel):
+    """Non-sensitive configuration loaded from ``.nanobot/nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: Path
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    provider: ProviderSettingsConfig
+    default_channel: str = "qq"
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+    @field_validator("default_channel")
+    @classmethod
+    def _reject_blank_default_channel(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class NanobotConfig(BaseModel):
+    """Resolved runtime configuration after merging file and secret settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: ProviderConfig
+    workspace: Path | None = None
+    default_channel: str = "qq"
+    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    qq: QQChannelConfig | None = None

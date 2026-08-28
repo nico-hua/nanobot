@@ -32,6 +32,7 @@ class AnthropicCompatProvider(LLMProvider):
         default_model: str,
         default_max_tokens: int = 1024,
         default_thinking: Mapping[str, Any] | None = None,
+        default_temperature: float | None = None,
         *,
         client: Any | None = None,
     ) -> None:
@@ -41,6 +42,7 @@ class AnthropicCompatProvider(LLMProvider):
         self.default_thinking = (
             dict(default_thinking) if default_thinking is not None else None
         )
+        self.default_temperature = default_temperature
         self._client = client if client is not None else AsyncAnthropic(
             api_key=api_key,
             base_url=api_base,
@@ -125,8 +127,11 @@ class AnthropicCompatProvider(LLMProvider):
             request["system"] = "\n\n".join(system_parts)
         if tools is not None:
             request["tools"] = [tool.to_anthropic_tool() for tool in tools]
-        if temperature is not None:
-            request["temperature"] = temperature
+        resolved_temperature = (
+            temperature if temperature is not None else self.default_temperature
+        )
+        if resolved_temperature is not None:
+            request["temperature"] = resolved_temperature
         if self.default_thinking is not None:
             request["thinking"] = dict(self.default_thinking)
         return request
