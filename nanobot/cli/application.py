@@ -7,13 +7,13 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..agent import AgentLoop, AgentRunner, ContextBuilder, SessionCompactor
+from ..agent import AgentLoop, AgentRunner, ContextBuilder
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
 from ..mcp import MCPProvider
 from ..providers import LLMProvider, create_default_provider_factory
-from ..session import SessionManager
+from ..session import SessionCompactor, SessionManager
 from ..tools import ToolContext, ToolLoader, ToolRegistry
 
 logger = logging.getLogger(__name__)

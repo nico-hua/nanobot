@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
-from nanobot.agent import SessionCompactor, estimate_messages_tokens
+from nanobot.agent import estimate_messages_tokens
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -15,7 +15,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
-from nanobot.session import Session
+from nanobot.session import Session, SessionCompactor
 from nanobot.tools import Tool
 
 

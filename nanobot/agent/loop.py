@@ -7,9 +7,8 @@ import logging
 
 from ..bus import MessageBus, OutboundMessage
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
-from ..session import SessionManager
+from ..session import SessionCompactor, SessionManager
 from ..tools import ToolRegistry
-from .compactor import SessionCompactor
 from .context import ContextBuilder, ContextWindowExceededError
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
 

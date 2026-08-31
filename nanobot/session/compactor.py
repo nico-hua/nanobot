@@ -16,8 +16,8 @@ from ..providers import (
     SystemMessage,
     ToolMessage,
 )
-from ..session import Session
-from .context import _split_user_turns, estimate_messages_tokens
+from .models import Session
+from .tokens import estimate_messages_tokens, split_user_turns
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class SessionCompactor:
 
     def _select_messages(self, session: Session) -> tuple[tuple[BaseMessage, ...], int]:
         raw_messages = session.messages[session.summary_until :]
-        turns = _split_user_turns(raw_messages)
+        turns = split_user_turns(raw_messages)
         if not turns or sum(len(turn) for turn in turns) != len(raw_messages):
             return (), session.summary_until
 

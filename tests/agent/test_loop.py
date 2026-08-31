@@ -16,7 +16,6 @@ from nanobot.agent import (
     AgentRunResult,
     AgentRunSpec,
     ContextBuilder,
-    SessionCompactor,
     estimate_messages_tokens,
 )
 from nanobot.providers import (
@@ -29,7 +28,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
-from nanobot.session import SessionManager
+from nanobot.session import SessionCompactor, SessionManager
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
 
