@@ -9,16 +9,16 @@ from typing import Any
 
 from ..agent import AgentLoop, AgentRunner
 from ..bus import MessageBus
-from ..channels import BaseChannel, ChannelManager, QQChannel
+from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
 from ..mcp import MCPProvider
-from ..providers import AnthropicCompatProvider, LLMProvider, OpenAICompatProvider
+from ..providers import LLMProvider, create_default_provider_factory
 from ..tools import ToolContext, ToolLoader, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-ProviderFactory = Callable[[ProviderConfig], LLMProvider]
-ChannelFactory = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
+ProviderCreator = Callable[[ProviderConfig], LLMProvider]
+ChannelCreator = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
 MCPProviderFactory = Callable[[ToolRegistry, Mapping[str, Any]], MCPProvider]
 AgentLoopFactory = Callable[[AgentRunner, LLMProvider, ToolRegistry, MessageBus], AgentLoop]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
@@ -31,8 +31,8 @@ class Application:
         self,
         config: NanobotConfig,
         *,
-        provider_factory: ProviderFactory | None = None,
-        channel_factory: ChannelFactory | None = None,
+        provider_factory: ProviderCreator | None = None,
+        channel_factory: ChannelCreator | None = None,
         mcp_provider_factory: MCPProviderFactory = MCPProvider,
         tool_loader: ToolLoader | None = None,
         agent_loop_factory: AgentLoopFactory | None = None,
@@ -44,8 +44,8 @@ class Application:
             raise ValueError("Application requires a configured workspace")
 
         self._config = config
-        provider_factory = provider_factory or _create_provider
-        channel_factory = channel_factory or _create_channel
+        provider_factory = provider_factory or create_default_provider_factory().create
+        channel_factory = channel_factory or create_default_channel_factory().create
         agent_loop_factory = agent_loop_factory or _create_agent_loop
         self._message_bus = MessageBus()
         self._tool_registry = ToolRegistry()
@@ -248,36 +248,6 @@ class Application:
                 raise
             logger.error("Application background task stopped unexpectedly (component=%s)", component_name)
             raise RuntimeError(f"{component_name} stopped unexpectedly")
-
-
-def _create_provider(config: ProviderConfig) -> LLMProvider:
-    if config.type == "openai_compat":
-        return OpenAICompatProvider(
-            api_key=config.api_key,
-            api_base=config.api_base,
-            default_model=config.default_model,
-            default_max_tokens=config.default_max_tokens,
-            default_temperature=config.default_temperature,
-        )
-    return AnthropicCompatProvider(
-        api_key=config.api_key,
-        api_base=config.api_base,
-        default_model=config.default_model,
-        default_max_tokens=config.default_max_tokens,
-        default_temperature=config.default_temperature,
-    )
-
-
-def _create_channel(
-    channel_name: str,
-    message_bus: MessageBus,
-    config: NanobotConfig,
-) -> BaseChannel:
-    if channel_name != "qq":
-        raise ValueError(f"Unsupported configured channel: {channel_name}")
-    if config.qq is None:
-        raise ValueError("The qq channel requires QQ credentials in .env")
-    return QQChannel(channel_name, message_bus, config.qq)
 
 
 def _create_agent_loop(

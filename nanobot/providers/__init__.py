@@ -5,6 +5,7 @@ from .base import (
     ProviderError,
     TokenUsage,
 )
+from .factory import ProviderFactory, create_default_provider_factory
 from .messages import (
     AIMessage,
     BaseMessage,
@@ -28,8 +29,10 @@ __all__ = [
     "MessageRole",
     "OpenAICompatProvider",
     "ProviderError",
+    "ProviderFactory",
     "SystemMessage",
     "TokenUsage",
     "ToolCallRequest",
     "ToolMessage",
+    "create_default_provider_factory",
 ]
