@@ -7,8 +7,10 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
+from ..memory import MemoryStore
 from ..providers import BaseMessage, HumanMessage, SystemMessage
 from ..session.tokens import (
+    estimate_message_tokens,  # noqa: F401
     estimate_messages_tokens,
     split_user_turns,
 )
@@ -47,6 +49,7 @@ class ContextBuilder:
         self._workspace = Path(workspace).resolve()
         self._context_window_tokens = context_window_tokens
         self._output_token_reserve = output_token_reserve
+        self._memory_store = MemoryStore(self._workspace)
 
     def build_system_prompt(self) -> str:
         """Return a prompt built from the current workspace file contents."""
@@ -68,6 +71,9 @@ class ContextBuilder:
             content = self._read_optional_file(filename)
             if content is not None:
                 sections.append(f"{title}\n\n{content}")
+        memory = self._memory_store.read()
+        if memory:
+            sections.append(f"## Long-term Memory\n\n{memory}")
         return "\n\n".join(sections)
 
     def build_request_messages(

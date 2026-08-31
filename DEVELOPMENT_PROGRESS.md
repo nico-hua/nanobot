@@ -1,18 +1,22 @@
 # 项目开发进度
 
-## 最新 Session 摘要压缩与上下文窗口（2026-08-31）
+## 最新长期记忆、Session 摘要与上下文窗口（2026-08-31）
 
 - [x] 将 `ContextBuilder` 和日志初始化模块归入 `nanobot/agent/`；`Application` 负责基于 workspace、总上下文窗口和输出预留创建 `ContextBuilder`，再显式注入 `AgentLoop`。
 - [x] `ContextBuilder` 每次请求时读取 workspace 的 `AGENTS.md`、`SOUL.md`、`USER.md`，以固定顺序构建 system prompt；文件不存在、为空或无法读取时跳过。
+- [x] 新增 `MemoryStore`：按 UTF-8 动态读取 `<workspace>/memory/MEMORY.md`；记忆缺失、为空或不可读时视为空，不影响 Agent 请求。`ContextBuilder` 将非空记忆作为固定的 `## Long-term Memory` 区块注入 system prompt，且不会保存到 Session。
+- [x] 新增 `MemoryConsolidator`：携带现有长期记忆与指定范围的完成对话，通过一次 `LLMProvider.complete()` 生成完整替换式 MEMORY.md 内容。它只在非空、无工具调用的结果下经临时文件原子替换写入，失败保留原文件。
+- [x] `Application` 为 workspace 创建共享的 `MemoryStore` 和 `MemoryConsolidator`。AgentRunner 成功且本轮完整消息保存后，`AgentLoop` 使用不可变本轮快照异步调度记忆整理；任务不阻塞用户回复、不会进入 AgentRunner 或递归触发。
+- [x] `MemoryConsolidator` 以 workspace 级异步锁串行化同一运行时中的读、模型调用和写入；`AgentLoop.close()` 与 Application 关闭流程统一取消并等待 Session 摘要和长期记忆任务。ephemeral、system metadata、slash command、取消和失败请求不会触发记忆整理。
 - [x] 新增无额外依赖的稳定 token 估算：文本、消息结构、tool call 和工具 schema 均会计入估算；历史裁剪从最近的完整 user turn 向前保留，避免截断 tool call/tool result 链。
 - [x] 请求侧仅按 `context_window_tokens`（当前 `128000`）裁剪原始历史：从总窗口扣除合并后的 system prompt、会话摘要、当前用户消息、工具 schema 和 Provider 的 `max_tokens` 输出预留后，得到可用历史预算。固定内容已超窗时提示用户新开会话；`max_history_tokens` 已删除。
 - [x] 新增 `SessionCompactor`：AgentRunner 成功完成且完整消息保存后，`AgentLoop` 异步触发摘要压缩。压缩只覆盖尚未摘要的完整旧轮次，保留完整原始消息，并持久化 `summary` 与 `summary_until`。
 - [x] 会话摘要会追加到同一条 system prompt 的 `## Conversation Summary` 区段，不会作为普通 assistant 消息保存或展示给用户。system prompt 每轮动态重建，不保存进 JSONL Session。
 - [x] 后台摘要任务按 session 串行化并由 `AgentLoop` 跟踪；`Application` 关闭时会取消并等待这些任务，压缩失败不会影响当前回复或破坏已有会话。
 - [x] QQ Channel 的 C2C 和群聊回复改用 QQ 原生 Markdown 消息格式；qq-botpy 的默认文件日志已关闭，避免继续生成 `botpy.log`。
-- [x] 最近全量离线测试：`206 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+- [x] 最近全量离线测试：`225 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
 
-本阶段仍不实现真实 tokenizer、provider 原生压缩、多级摘要、长期记忆、TTL、自动重试或后台压缩恢复。
+本阶段仍不实现真实 tokenizer、provider 原生压缩、多级摘要、记忆自动重试、Dream、记忆去重/冲突解决、TTL 或后台任务恢复。
 
 ## 最新 Session 持久化（2026-08-31）
 
@@ -170,7 +174,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - `ToolLoader` 稳定发现 builtin 工具，跳过私有模块、抽象类和重复类，并通过 `enabled(context)` / `create(context)` 完成实例化；
 - `ToolContext` 当前仅有 `workspace`，后续可在实际工具需要时增加其他共享依赖。
 
-当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；Session 只持久化 user、assistant、tool call 与 tool result 消息。system prompt 在每轮请求时由 `ContextBuilder` 重建，摘要作为该 system prompt 的一部分提供给模型；成功保存本轮完整消息后，后台 `SessionCompactor` 可更新独立的摘要状态。
+当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；Session 只持久化 user、assistant、tool call 与 tool result 消息。system prompt 在每轮请求时由 `ContextBuilder` 重建，包含会话摘要和 `<workspace>/memory/MEMORY.md` 的长期记忆；成功保存本轮完整消息后，后台 `SessionCompactor` 与 `MemoryConsolidator` 可分别更新摘要和 workspace 级长期记忆。
 
 当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID 和内容；`AgentLoop.run()` 仅消费总线消息并发布结果，`process_direct()` 则处理一条显式传入的路由消息。总线为空时，Loop 每次最多等待一秒后继续轮询；取消 Loop 不会留下它创建的后台任务。
 
@@ -178,7 +182,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 - 完整 JSON Schema 的运行时校验；
 - 流式、并行工具调度、上下文注入和自动重试；
-- 摘要重试、多级摘要、摘要后台恢复、TTL 和长期记忆。
+- 摘要与记忆重试、多级摘要、后台任务恢复、TTL、Dream，以及记忆去重和冲突解决。
 - 除 QQ 文本消息外的真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
@@ -223,7 +227,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 4. 如何处理 Anthropic、OpenAI 及其他兼容协议在 `max_tokens`、thinking、finish reason 和 usage 字段上的差异。
 5. 是否需要支持多轮工具调用，以及如何保证工具结果、调用 ID 和消息历史的一致性。
 6. 如何在不泄露凭据的前提下组织 live tests，并在 CI 中默认只运行离线测试。
-7. 如何在现有 QQ 文本 Channel 之外接入更多真实 Channel，并加入可靠投递和长期记忆模块，同时保持现有单轮执行边界清晰。
+7. 如何在现有 QQ 文本 Channel 之外接入更多真实 Channel，并加入可靠投递、长期记忆的后台恢复与冲突处理，同时保持现有单轮执行边界清晰。
 
 ## 当前明确不实现的能力
 

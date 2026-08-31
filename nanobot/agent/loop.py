@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
+from typing import Any
 
 from ..bus import MessageBus, OutboundMessage
+from ..memory import MemoryConsolidator
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
 from ..session import SessionCompactor, SessionManager
 from ..tools import ToolRegistry
@@ -32,6 +35,7 @@ class AgentLoop:
         context_builder: ContextBuilder,
         message_bus: MessageBus | None = None,
         session_compactor: SessionCompactor | None = None,
+        memory_consolidator: MemoryConsolidator | None = None,
     ) -> None:
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
@@ -50,6 +54,11 @@ class AgentLoop:
             SessionCompactor,
         ):
             raise TypeError("AgentLoop session_compactor must be a SessionCompactor")
+        if memory_consolidator is not None and not isinstance(
+            memory_consolidator,
+            MemoryConsolidator,
+        ):
+            raise TypeError("AgentLoop memory_consolidator must be a MemoryConsolidator")
 
         self._runner = runner
         self._provider = provider
@@ -58,8 +67,10 @@ class AgentLoop:
         self._context_builder = context_builder
         self._message_bus = message_bus
         self._session_compactor = session_compactor
+        self._memory_consolidator = memory_consolidator
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._compaction_tasks: set[asyncio.Task[None]] = set()
+        self._memory_consolidation_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
     async def run(self) -> None:
@@ -84,6 +95,7 @@ class AgentLoop:
                         inbound.channel,
                         inbound.chat_id,
                         inbound.session_id,
+                        inbound.metadata,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -105,12 +117,12 @@ class AgentLoop:
             raise
 
     async def close(self) -> None:
-        """Cancel and await all background session compaction tasks."""
+        """Cancel and await all tracked background session tasks."""
 
         if self._closed:
             return
         self._closed = True
-        tasks = tuple(self._compaction_tasks)
+        tasks = tuple(self._compaction_tasks | self._memory_consolidation_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
@@ -126,21 +138,43 @@ class AgentLoop:
                 task for task in tasks if task.done()
             )
 
+    async def wait_for_memory_consolidations(self) -> None:
+        """Wait until currently scheduled memory consolidations have completed."""
+
+        while self._memory_consolidation_tasks:
+            tasks = tuple(self._memory_consolidation_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._memory_consolidation_tasks.difference_update(
+                task for task in tasks if task.done()
+            )
+
     async def process_direct(
         self,
         content: str,
         channel: str,
         chat_id: str,
         session_id: str,
+        metadata: Mapping[str, Any] | None = None,
     ) -> AgentRunResult:
         """Process one routed message without reading or writing bus queues."""
 
         if not isinstance(content, str):
             raise TypeError("content must be a string")
         _validate_direct_routing(channel, chat_id, session_id)
-        return await self._run_once(content, _session_key(channel, chat_id, session_id))
+        _validate_metadata(metadata)
+        return await self._run_once(
+            content,
+            _session_key(channel, chat_id, session_id),
+            consolidate_memory=_is_memory_eligible(content, metadata),
+        )
 
-    async def _run_once(self, content: str, session_key: str) -> AgentRunResult:
+    async def _run_once(
+        self,
+        content: str,
+        session_key: str,
+        *,
+        consolidate_memory: bool,
+    ) -> AgentRunResult:
         """Persist one user message, run it, then persist the completed history."""
 
         async with self._lock_for(session_key):
@@ -174,13 +208,17 @@ class AgentLoop:
                 tool_registry=self._tool_registry,
             )
             result = await self._runner.run(spec)
+            completed_messages = _without_system_messages(result.messages[len(spec.messages) :])
             completed_session = session.with_messages(
                 (
                     *session.messages,
-                    *_without_system_messages(result.messages[len(spec.messages) :]),
+                    *completed_messages,
                 )
             )
             self._session_manager.save(completed_session)
+            memory_snapshot = (current_message, *completed_messages)
+            if consolidate_memory:
+                self._schedule_memory_consolidation(memory_snapshot)
             self._schedule_compaction(session_key)
             return result
 
@@ -202,6 +240,24 @@ class AgentLoop:
             raise
         except Exception:
             logger.exception("Background session compaction failed")
+
+    def _schedule_memory_consolidation(
+        self,
+        messages: tuple[BaseMessage, ...],
+    ) -> None:
+        if self._memory_consolidator is None or self._closed:
+            return
+        task = asyncio.create_task(self._consolidate_memory(messages))
+        self._memory_consolidation_tasks.add(task)
+        task.add_done_callback(self._memory_consolidation_tasks.discard)
+
+    async def _consolidate_memory(self, messages: tuple[BaseMessage, ...]) -> None:
+        try:
+            await self._memory_consolidator.consolidate(messages)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Background long-term memory consolidation failed")
 
     def _lock_for(self, session_key: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_key)
@@ -228,3 +284,20 @@ def _session_key(channel: str, chat_id: str, session_id: str) -> str:
 
 def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMessage, ...]:
     return tuple(message for message in messages if not isinstance(message, SystemMessage))
+
+
+def _validate_metadata(metadata: Mapping[str, Any] | None) -> None:
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise TypeError("metadata must be a mapping or None")
+
+
+def _is_memory_eligible(content: str, metadata: Mapping[str, Any] | None) -> bool:
+    if content.lstrip().startswith("/"):
+        return False
+    if metadata is None:
+        return True
+    if metadata.get("ephemeral") is True or metadata.get("is_ephemeral") is True:
+        return False
+    if metadata.get("message_type") == "system" or metadata.get("role") == "system":
+        return False
+    return metadata.get("source") != "memory_consolidator"

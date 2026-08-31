@@ -21,6 +21,7 @@ from nanobot.providers import (
     ToolCallRequest,
     ToolMessage,
 )
+from nanobot.session import Session
 from nanobot.tools import Tool, ToolParameter, ToolResult
 
 
@@ -91,6 +92,52 @@ class ContextBuilderTest(unittest.TestCase):
             prompt.index("## Agent Style"),
             prompt.index("## User Profile"),
         )
+
+    def test_includes_long_term_memory_after_workspace_context(self) -> None:
+        self._write("USER.md", "The user prefers Chinese.")
+        self._write_memory("Remember the user prefers concise answers.")
+
+        prompt = ContextBuilder(self._workspace).build_system_prompt()
+
+        self.assertIn("## Long-term Memory", prompt)
+        self.assertIn("Remember the user prefers concise answers.", prompt)
+        self.assertLess(prompt.index("## User Profile"), prompt.index("## Long-term Memory"))
+
+    def test_skips_missing_or_empty_long_term_memory(self) -> None:
+        builder = ContextBuilder(self._workspace)
+
+        self.assertNotIn("## Long-term Memory", builder.build_system_prompt())
+
+        self._write_memory(" \n")
+
+        self.assertNotIn("## Long-term Memory", builder.build_system_prompt())
+
+    def test_reloads_long_term_memory_for_each_system_prompt(self) -> None:
+        memory_path = self._write_memory("First memory.")
+        builder = ContextBuilder(self._workspace)
+
+        first_prompt = builder.build_system_prompt()
+        memory_path.write_text("Second memory.", encoding="utf-8")
+        second_prompt = builder.build_system_prompt()
+
+        self.assertIn("First memory.", first_prompt)
+        self.assertIn("Second memory.", second_prompt)
+        self.assertNotIn("First memory.", second_prompt)
+
+    def test_long_term_memory_does_not_modify_session_messages(self) -> None:
+        self._write_memory("Persistent user preference.")
+        session = Session.create("memory-test").with_messages(
+            (HumanMessage(content="Previous question."),)
+        )
+        original_messages = session.messages
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            session.messages,
+            HumanMessage(content="Current question."),
+        )
+
+        self.assertEqual(session.messages, original_messages)
+        self.assertIn("Persistent user preference.", messages[0].content)
 
     def test_reloads_files_without_modifying_the_workspace(self) -> None:
         path = self._write("SOUL.md", "First style.")
@@ -219,6 +266,7 @@ class ContextBuilderTest(unittest.TestCase):
             HumanMessage(content="Recent question."),
             AIMessage(content="Recent answer."),
         )
+        self._write_memory("The user is working on an Agent project.")
         builder = ContextBuilder(self._workspace)
 
         messages = builder.build_request_messages(
@@ -231,6 +279,12 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIsInstance(messages[0], SystemMessage)
         self.assertIn("## Conversation Summary", messages[0].content)
         self.assertIn("The covered question was answered.", messages[0].content)
+        self.assertIn("## Long-term Memory", messages[0].content)
+        self.assertIn("The user is working on an Agent project.", messages[0].content)
+        self.assertLess(
+            messages[0].content.index("## Long-term Memory"),
+            messages[0].content.index("## Conversation Summary"),
+        )
         self.assertEqual(messages[1:-1], recent_turn)
         self.assertEqual(messages[-1], HumanMessage(content="Current question."))
 
@@ -345,6 +399,12 @@ class ContextBuilderTest(unittest.TestCase):
 
     def _write(self, filename: str, content: str) -> Path:
         path = self._workspace / filename
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _write_memory(self, content: str) -> Path:
+        path = self._workspace / "memory" / "MEMORY.md"
+        path.parent.mkdir(exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
 

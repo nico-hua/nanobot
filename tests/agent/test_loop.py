@@ -18,6 +18,7 @@ from nanobot.agent import (
     ContextBuilder,
     estimate_messages_tokens,
 )
+from nanobot.memory import MemoryConsolidator, MemoryStore
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -99,6 +100,68 @@ class BackgroundCompactionProvider(LLMProvider):
 
     def release_summary(self) -> None:
         self._summary_release.set()
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        raise AssertionError("AgentLoop must not use streaming")
+
+
+class BackgroundMemoryProvider(LLMProvider):
+    def __init__(
+        self,
+        responses: Sequence[LLMResponse],
+        memory_response: LLMResponse | Exception,
+        *,
+        block_memory: bool = False,
+    ) -> None:
+        self._responses = iter(responses)
+        self._memory_response = memory_response
+        self.normal_calls: list[tuple[BaseMessage, ...]] = []
+        self.memory_requests: list[tuple[BaseMessage, ...]] = []
+        self.memory_started = asyncio.Event()
+        self.memory_finished = asyncio.Event()
+        self._memory_release = asyncio.Event()
+        self._active_memory_calls = 0
+        self.maximum_concurrent_memory_calls = 0
+        if not block_memory:
+            self._memory_release.set()
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del tools, max_tokens, temperature
+        request = tuple(messages)
+        if _is_memory_request(request):
+            self.memory_requests.append(request)
+            self.memory_started.set()
+            self._active_memory_calls += 1
+            self.maximum_concurrent_memory_calls = max(
+                self.maximum_concurrent_memory_calls,
+                self._active_memory_calls,
+            )
+            try:
+                await self._memory_release.wait()
+                if isinstance(self._memory_response, Exception):
+                    raise self._memory_response
+                return self._memory_response
+            finally:
+                self._active_memory_calls -= 1
+                self.memory_finished.set()
+        self.normal_calls.append(request)
+        return next(self._responses)
+
+    def release_memory(self) -> None:
+        self._memory_release.set()
 
     async def stream(
         self,
@@ -781,6 +844,194 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(provider.summary_finished.is_set())
         self.assertIsNone(self._sessions.get_or_create("session-1").summary)
 
+    async def test_schedules_memory_after_saving_a_complete_snapshot_without_blocking(self) -> None:
+        provider = BackgroundMemoryProvider(
+            (LLMResponse(content="Current answer."),),
+            LLMResponse(content="The user prefers concise answers."),
+            block_memory=True,
+        )
+        store = MemoryStore(self._temporary_directory.name)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(provider, store),
+        )
+
+        result = await asyncio.wait_for(
+            loop.process_direct("Current question.", "test", "chat-1", "session-1"),
+            timeout=1,
+        )
+
+        self.assertEqual(result.content, "Current answer.")
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                HumanMessage(content="Current question."),
+                AIMessage(content="Current answer."),
+            ),
+        )
+        await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
+        self.assertEqual(store.read(), "")
+        request = provider.memory_requests[0]
+        self.assertIn('"content":"Current question."', request[1].content)
+        self.assertIn('"content":"Current answer."', request[1].content)
+
+        provider.release_memory()
+        await loop.wait_for_memory_consolidations()
+
+        self.assertEqual(store.read(), "The user prefers concise answers.")
+        self.assertEqual(len(provider.normal_calls), 1)
+        self.assertEqual(len(provider.memory_requests), 1)
+
+    async def test_runner_failure_does_not_schedule_memory_consolidation(self) -> None:
+        provider = BackgroundMemoryProvider((), LLMResponse(content="unused"))
+        loop = AgentLoop(
+            FailingRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(
+                provider,
+                MemoryStore(self._temporary_directory.name),
+            ),
+        )
+
+        with self.assertRaises(AgentRunnerError):
+            await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await asyncio.sleep(0)
+
+        self.assertEqual(provider.memory_requests, [])
+
+    async def test_memory_failure_does_not_affect_the_saved_user_result(self) -> None:
+        provider = BackgroundMemoryProvider(
+            (LLMResponse(content="Current answer."),),
+            RuntimeError("memory provider unavailable"),
+        )
+        store = MemoryStore(self._temporary_directory.name)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(provider, store),
+        )
+
+        result = await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await loop.wait_for_memory_consolidations()
+
+        self.assertEqual(result.content, "Current answer.")
+        self.assertEqual(store.read(), "")
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                HumanMessage(content="Current question."),
+                AIMessage(content="Current answer."),
+            ),
+        )
+
+    async def test_memory_consolidation_is_serialized_for_all_sessions_in_one_workspace(self) -> None:
+        provider = BackgroundMemoryProvider(
+            (
+                LLMResponse(content="First answer."),
+                LLMResponse(content="Second answer."),
+            ),
+            LLMResponse(content="Stable project convention."),
+            block_memory=True,
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(
+                provider,
+                MemoryStore(self._temporary_directory.name),
+            ),
+        )
+
+        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
+        await loop.process_direct("Second question.", "test", "chat-2", "session-2")
+        await asyncio.sleep(0)
+
+        self.assertEqual(provider.maximum_concurrent_memory_calls, 1)
+        provider.release_memory()
+        await loop.wait_for_memory_consolidations()
+
+        self.assertEqual(provider.maximum_concurrent_memory_calls, 1)
+        self.assertEqual(len(provider.memory_requests), 2)
+        self.assertIn('"content":"First question."', provider.memory_requests[0][1].content)
+        self.assertIn('"content":"Second question."', provider.memory_requests[1][1].content)
+
+    async def test_close_cancels_pending_memory_consolidation(self) -> None:
+        provider = BackgroundMemoryProvider(
+            (LLMResponse(content="Current answer."),),
+            LLMResponse(content="unused"),
+            block_memory=True,
+        )
+        store = MemoryStore(self._temporary_directory.name)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(provider, store),
+        )
+
+        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
+        await loop.close()
+
+        self.assertTrue(provider.memory_finished.is_set())
+        self.assertEqual(store.read(), "")
+
+    async def test_skips_memory_consolidation_for_non_normal_user_messages(self) -> None:
+        provider = BackgroundMemoryProvider(
+            (
+                LLMResponse(content="Ephemeral answer."),
+                LLMResponse(content="System answer."),
+                LLMResponse(content="Command answer."),
+            ),
+            LLMResponse(content="unused"),
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            memory_consolidator=MemoryConsolidator(
+                provider,
+                MemoryStore(self._temporary_directory.name),
+            ),
+        )
+
+        await loop.process_direct(
+            "Ephemeral question.",
+            "test",
+            "chat-1",
+            "session-1",
+            {"ephemeral": True},
+        )
+        await loop.process_direct(
+            "System question.",
+            "test",
+            "chat-2",
+            "session-2",
+            {"message_type": "system"},
+        )
+        await loop.process_direct("/help", "test", "chat-3", "session-3")
+        await asyncio.sleep(0)
+
+        self.assertEqual(provider.memory_requests, [])
+
     async def test_returns_a_user_facing_message_when_required_context_exceeds_the_window(self) -> None:
         provider = ScriptedProvider(())
         loop = AgentLoop(
@@ -819,4 +1070,10 @@ def _context_builder(workspace: str, history_budget: int = 64_000) -> ContextBui
 def _is_summary_request(messages: tuple[BaseMessage, ...]) -> bool:
     return bool(messages) and isinstance(messages[0], SystemMessage) and messages[0].content.startswith(
         "Summarize this conversation"
+    )
+
+
+def _is_memory_request(messages: tuple[BaseMessage, ...]) -> bool:
+    return bool(messages) and isinstance(messages[0], SystemMessage) and messages[0].content.startswith(
+        "Update the long-term memory"
     )

@@ -12,6 +12,7 @@ from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
 from ..mcp import MCPProvider
+from ..memory import MemoryConsolidator, MemoryStore
 from ..providers import LLMProvider, create_default_provider_factory
 from ..session import SessionCompactor, SessionManager
 from ..tools import ToolContext, ToolLoader, ToolRegistry
@@ -29,6 +30,7 @@ AgentLoopFactory = Callable[
         SessionManager,
         ContextBuilder,
         SessionCompactor,
+        MemoryConsolidator,
         MessageBus,
     ],
     AgentLoop,
@@ -78,6 +80,11 @@ class Application:
             token_threshold=config.compaction_threshold_tokens,
             recent_token_budget=config.compaction_recent_tokens,
         )
+        self._memory_store = MemoryStore(config.workspace)
+        self._memory_consolidator = MemoryConsolidator(
+            self._provider,
+            self._memory_store,
+        )
         self._mcp_provider = mcp_provider_factory(
             self._tool_registry,
             config.mcp_servers,
@@ -89,6 +96,7 @@ class Application:
             self._session_manager,
             self._context_builder,
             self._session_compactor,
+            self._memory_consolidator,
             self._message_bus,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
@@ -292,6 +300,7 @@ def _create_agent_loop(
     session_manager: SessionManager,
     context_builder: ContextBuilder,
     session_compactor: SessionCompactor,
+    memory_consolidator: MemoryConsolidator,
     message_bus: MessageBus,
 ) -> AgentLoop:
     return AgentLoop(
@@ -302,4 +311,5 @@ def _create_agent_loop(
         context_builder,
         message_bus=message_bus,
         session_compactor=session_compactor,
+        memory_consolidator=memory_consolidator,
     )

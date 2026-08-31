@@ -13,6 +13,7 @@ from nanobot.bus import MessageBus
 from nanobot.channels import BaseChannel, ChannelManager, FakeChannel
 from nanobot.cli import Application
 from nanobot.config import MCPServerConfig, NanobotConfig, ProviderConfig
+from nanobot.memory import MemoryConsolidator
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
 from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry
 from tests.tools.fakes import WeatherTool
@@ -176,6 +177,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_assembles_shared_dependencies_and_closes_in_reverse_order(self) -> None:
         events: list[str] = []
         received_context_builders: list[ContextBuilder] = []
+        received_memory_consolidators: list[MemoryConsolidator] = []
         channel: RecordingChannel | None = None
         loop = RecordingLoop(events)
 
@@ -202,10 +204,12 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             session_manager: Any,
             context_builder: ContextBuilder,
             session_compactor: Any,
+            memory_consolidator: MemoryConsolidator,
             bus: MessageBus,
         ) -> RecordingLoop:
             del runner, provider, registry, session_manager, session_compactor
             received_context_builders.append(context_builder)
+            received_memory_consolidators.append(memory_consolidator)
             return _configure_loop(loop, bus)
 
         app = Application(
@@ -225,6 +229,8 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(loop.message_bus, app.message_bus)
         self.assertIs(app.mcp_provider.registry, app.tool_registry)
         self.assertEqual(len(received_context_builders), 1)
+        self.assertEqual(len(received_memory_consolidators), 1)
+        self.assertIsInstance(received_memory_consolidators[0], MemoryConsolidator)
         self.assertTrue(app.tool_registry.has("get_weather"))
         self.assertTrue(app.channel_manager.dispatcher_running)
         self.assertIsNotNone(app.agent_task)
@@ -265,7 +271,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -295,7 +301,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -466,7 +472,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
     )
     return app, managers[0]
