@@ -17,6 +17,8 @@ class Session:
     created_at: datetime
     updated_at: datetime
     messages: tuple[BaseMessage, ...] = ()
+    summary: str | None = None
+    summary_until: int = 0
 
     def __post_init__(self) -> None:
         _validate_session_key(self.key)
@@ -27,6 +29,17 @@ class Session:
         ):
             raise TypeError("messages must be a sequence of BaseMessage instances")
         object.__setattr__(self, "messages", tuple(self.messages))
+        if self.summary is not None:
+            if not isinstance(self.summary, str):
+                raise TypeError("summary must be a string or None")
+            if not self.summary.strip():
+                raise ValueError("summary must not be blank")
+        if not isinstance(self.summary_until, int) or isinstance(self.summary_until, bool):
+            raise TypeError("summary_until must be an integer")
+        if self.summary_until < 0 or self.summary_until > len(self.messages):
+            raise ValueError("summary_until must reference the session message range")
+        if self.summary is None and self.summary_until:
+            raise ValueError("summary_until requires a summary")
 
     @classmethod
     def create(cls, key: str) -> Session:
@@ -44,6 +57,11 @@ class Session:
         """Return a session with its persisted update time replaced."""
 
         return replace(self, updated_at=updated_at)
+
+    def with_summary(self, summary: str, summary_until: int) -> Session:
+        """Return a session with one summary and its covered message boundary."""
+
+        return replace(self, summary=summary, summary_until=summary_until)
 
 
 def _validate_session_key(key: str) -> None:

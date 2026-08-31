@@ -92,6 +92,26 @@ class SessionManagerTest(unittest.TestCase):
             self.assertEqual(restored.messages[1].tool_calls, (tool_call,))
             self.assertEqual(restored.messages[2].tool_call_id, "call-1")
 
+    def test_summary_and_its_message_boundary_are_recovered(self) -> None:
+        messages = (
+            HumanMessage(content="First question"),
+            AIMessage(content="First answer"),
+            HumanMessage(content="Second question"),
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            manager = SessionManager(temporary_directory)
+            saved = manager.save(
+                manager.get_or_create("summary-session")
+                .with_messages(messages)
+                .with_summary("The first question was answered.", 2)
+            )
+
+            restored = SessionManager(temporary_directory).get_or_create("summary-session")
+
+            self.assertEqual(restored, saved)
+            self.assertEqual(restored.summary, "The first question was answered.")
+            self.assertEqual(restored.summary_until, 2)
+
     def test_failed_replace_keeps_the_existing_session_file_intact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             manager = SessionManager(temporary_directory)

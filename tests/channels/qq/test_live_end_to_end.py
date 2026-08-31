@@ -145,7 +145,8 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
             session_manager=self._sessions,
             context_builder=ContextBuilder(
                 config.workspace,
-                config.max_history_tokens,
+                config.context_window_tokens,
+                config.provider.default_max_tokens,
             ),
             message_bus=self._bus,
         )

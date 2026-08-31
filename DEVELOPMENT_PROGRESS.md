@@ -1,16 +1,18 @@
 # 项目开发进度
 
-## 最新上下文构建、历史裁剪与 QQ 输出（2026-08-31）
+## 最新 Session 摘要压缩与上下文窗口（2026-08-31）
 
-- [x] 将 `ContextBuilder` 和日志初始化模块归入 `nanobot/agent/`；`Application` 负责基于 workspace 与配置创建 `ContextBuilder`，再显式注入 `AgentLoop`。
+- [x] 将 `ContextBuilder` 和日志初始化模块归入 `nanobot/agent/`；`Application` 负责基于 workspace、总上下文窗口和输出预留创建 `ContextBuilder`，再显式注入 `AgentLoop`。
 - [x] `ContextBuilder` 每次请求时读取 workspace 的 `AGENTS.md`、`SOUL.md`、`USER.md`，以固定顺序构建 system prompt；文件不存在、为空或无法读取时跳过。
-- [x] system prompt 不再保存到 JSONL Session。`AgentLoop` 每轮动态构建它，并在处理旧会话时过滤遗留的 system message；Session 继续完整保存 user、assistant、tool call 和 tool result 消息。
-- [x] 在 `.nanobot/nanobot.json` 增加顶层 `max_history_tokens`，当前配置为 `64000`。该预算只限制发送给模型的历史消息，不会裁掉 system prompt 或当前用户消息。
-- [x] 实现无额外依赖的稳定 token 估算：按文本字符、消息结构和 tool call 的稳定 JSON 参数估算；裁剪按完整 user turn 从最近向前保留，避免截断 tool call/tool result 链。
+- [x] 新增无额外依赖的稳定 token 估算：文本、消息结构、tool call 和工具 schema 均会计入估算；历史裁剪从最近的完整 user turn 向前保留，避免截断 tool call/tool result 链。
+- [x] 请求侧仅按 `context_window_tokens`（当前 `128000`）裁剪原始历史：从总窗口扣除合并后的 system prompt、会话摘要、当前用户消息、工具 schema 和 Provider 的 `max_tokens` 输出预留后，得到可用历史预算。固定内容已超窗时提示用户新开会话；`max_history_tokens` 已删除。
+- [x] 新增 `SessionCompactor`：AgentRunner 成功完成且完整消息保存后，`AgentLoop` 异步触发摘要压缩。压缩只覆盖尚未摘要的完整旧轮次，保留完整原始消息，并持久化 `summary` 与 `summary_until`。
+- [x] 会话摘要会追加到同一条 system prompt 的 `## Conversation Summary` 区段，不会作为普通 assistant 消息保存或展示给用户。system prompt 每轮动态重建，不保存进 JSONL Session。
+- [x] 后台摘要任务按 session 串行化并由 `AgentLoop` 跟踪；`Application` 关闭时会取消并等待这些任务，压缩失败不会影响当前回复或破坏已有会话。
 - [x] QQ Channel 的 C2C 和群聊回复改用 QQ 原生 Markdown 消息格式；qq-botpy 的默认文件日志已关闭，避免继续生成 `botpy.log`。
-- [x] 最近全量离线测试：`191 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+- [x] 最近全量离线测试：`206 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
 
-本阶段仍不实现真实 tokenizer、历史摘要压缩、长期记忆、`compacted_until` 或自动压缩。
+本阶段仍不实现真实 tokenizer、provider 原生压缩、多级摘要、长期记忆、TTL、自动重试或后台压缩恢复。
 
 ## 最新 Session 持久化（2026-08-31）
 
@@ -18,7 +20,7 @@
 - [x] `SessionManager` 默认将运行时会话写入 `<workspace>/sessions/`；`.nanobot/workspace/` 已作为本地运行时数据忽略，不提交会话内容。
 - [x] `Application` 创建共享 `SessionManager` 并注入 `AgentLoop`；Agent 重启后可从 workspace 恢复会话历史。
 - [x] `AgentLoop` 优先使用非空 `session_id` 作为会话键；为空时回退为 `channel:chat_id`。MessageBus 保留该路由字段，并允许空值触发回退。
-- [x] 系统提示词“你是一个有用的助手”作为会话首条消息持久化；用户消息会在模型调用前保存，成功后依序保存 assistant、tool call 与 tool result 消息。
+- [x] system prompt 不持久化到 Session；每次请求根据 workspace 动态构建。用户消息会在模型调用前保存，成功后依序保存 assistant、tool call 与 tool result 消息。
 - [x] 添加会话存储与 Loop 集成测试，覆盖重启恢复、工具消息顺序、会话隔离、空 session ID 回退和执行失败后的历史保留。
 
 ## 最新运行时与 CLI 入口（2026-08-28）
@@ -168,7 +170,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - `ToolLoader` 稳定发现 builtin 工具，跳过私有模块、抽象类和重复类，并通过 `enabled(context)` / `create(context)` 完成实例化；
 - `ToolContext` 当前仅有 `workspace`，后续可在实际工具需要时增加其他共享依赖。
 
-当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；系统提示词、用户消息、assistant 消息和 tool call/tool result 都会按顺序持久化。用户消息会先保存，Agent 执行失败时已有历史和本轮用户消息仍保留。
+当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；Session 只持久化 user、assistant、tool call 与 tool result 消息。system prompt 在每轮请求时由 `ContextBuilder` 重建，摘要作为该 system prompt 的一部分提供给模型；成功保存本轮完整消息后，后台 `SessionCompactor` 可更新独立的摘要状态。
 
 当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID 和内容；`AgentLoop.run()` 仅消费总线消息并发布结果，`process_direct()` 则处理一条显式传入的路由消息。总线为空时，Loop 每次最多等待一秒后继续轮询；取消 Loop 不会留下它创建的后台任务。
 
@@ -176,7 +178,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 - 完整 JSON Schema 的运行时校验；
 - 流式、并行工具调度、上下文注入和自动重试；
-- 会话并发访问控制、上下文压缩、摘要、TTL 和长期记忆。
+- 摘要重试、多级摘要、摘要后台恢复、TTL 和长期记忆。
 - 除 QQ 文本消息外的真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。

@@ -102,6 +102,8 @@ class JsonlSessionStorage:
             created_at=_timestamp_from_record(metadata, "created_at"),
             updated_at=_timestamp_from_record(metadata, "updated_at"),
             messages=messages,
+            summary=_optional_summary(metadata),
+            summary_until=_optional_summary_until(metadata),
         )
 
 
@@ -112,6 +114,8 @@ def _serialize_session(session: Session) -> str:
             "key": session.key,
             "created_at": session.created_at.isoformat(),
             "updated_at": session.updated_at.isoformat(),
+            "summary": session.summary,
+            "summary_until": session.summary_until,
         },
         *(_message_to_record(message) for message in session.messages),
     ]
@@ -210,6 +214,24 @@ def _required_string(record: Mapping[str, Any], name: str) -> str:
     value = record.get(name)
     if not isinstance(value, str):
         raise TypeError(f"Session record {name} must be a string")
+    return value
+
+
+def _optional_summary(record: Mapping[str, Any]) -> str | None:
+    value = record.get("summary")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("Session record summary must be a string or null")
+    if not value.strip():
+        raise ValueError("Session record summary must not be blank")
+    return value
+
+
+def _optional_summary_until(record: Mapping[str, Any]) -> int:
+    value = record.get("summary_until", 0)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise TypeError("Session record summary_until must be an integer")
     return value
 
 

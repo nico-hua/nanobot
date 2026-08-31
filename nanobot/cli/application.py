@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..agent import AgentLoop, AgentRunner, ContextBuilder
+from ..agent import AgentLoop, AgentRunner, ContextBuilder, SessionCompactor
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
@@ -22,7 +22,15 @@ ProviderCreator = Callable[[ProviderConfig], LLMProvider]
 ChannelCreator = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
 MCPProviderFactory = Callable[[ToolRegistry, Mapping[str, Any]], MCPProvider]
 AgentLoopFactory = Callable[
-    [AgentRunner, LLMProvider, ToolRegistry, SessionManager, ContextBuilder, MessageBus],
+    [
+        AgentRunner,
+        LLMProvider,
+        ToolRegistry,
+        SessionManager,
+        ContextBuilder,
+        SessionCompactor,
+        MessageBus,
+    ],
     AgentLoop,
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
@@ -62,7 +70,13 @@ class Application:
         self._session_manager = SessionManager(config.workspace)
         self._context_builder = ContextBuilder(
             config.workspace,
-            config.max_history_tokens,
+            config.context_window_tokens,
+            config.provider.default_max_tokens,
+        )
+        self._session_compactor = SessionCompactor(
+            self._provider,
+            token_threshold=config.compaction_threshold_tokens,
+            recent_token_budget=config.compaction_recent_tokens,
         )
         self._mcp_provider = mcp_provider_factory(
             self._tool_registry,
@@ -74,6 +88,7 @@ class Application:
             self._tool_registry,
             self._session_manager,
             self._context_builder,
+            self._session_compactor,
             self._message_bus,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
@@ -214,6 +229,7 @@ class Application:
             finally:
                 self._channel_task = None
                 await self._cancel_agent_task()
+                await self._close_agent_loop()
                 try:
                     await self._mcp_provider.close()
                 except asyncio.CancelledError:
@@ -233,6 +249,14 @@ class Application:
             await task
         except asyncio.CancelledError:
             pass
+
+    async def _close_agent_loop(self) -> None:
+        try:
+            await self._agent_loop.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Application failed while closing AgentLoop background tasks")
 
     def _runtime_tasks(self) -> tuple[asyncio.Task[None], asyncio.Task[None]]:
         if self._agent_task is None or self._channel_task is None:
@@ -267,6 +291,7 @@ def _create_agent_loop(
     tool_registry: ToolRegistry,
     session_manager: SessionManager,
     context_builder: ContextBuilder,
+    session_compactor: SessionCompactor,
     message_bus: MessageBus,
 ) -> AgentLoop:
     return AgentLoop(
@@ -276,4 +301,5 @@ def _create_agent_loop(
         session_manager,
         context_builder,
         message_bus=message_bus,
+        session_compactor=session_compactor,
     )

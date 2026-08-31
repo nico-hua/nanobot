@@ -108,9 +108,11 @@ class NanobotConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(config.default_channel, "qq")
-        self.assertEqual(config.max_history_tokens, 64_000)
+        self.assertEqual(config.context_window_tokens, 128_000)
+        self.assertEqual(config.compaction_threshold_tokens, 64_000)
+        self.assertEqual(config.compaction_recent_tokens, 32_000)
 
-    def test_rejects_a_negative_history_token_budget(self) -> None:
+    def test_rejects_a_non_positive_context_window(self) -> None:
         with self.assertRaises(ValidationError):
             NanobotConfig(
                 provider=ProviderConfig(
@@ -119,5 +121,18 @@ class NanobotConfigTest(unittest.TestCase):
                     api_base="https://example.test/v1",
                     default_model="test-model",
                 ),
-                max_history_tokens=-1,
+                context_window_tokens=0,
+            )
+
+    def test_rejects_an_invalid_compaction_budget_relationship(self) -> None:
+        with self.assertRaises(ValidationError):
+            NanobotConfig(
+                provider=ProviderConfig(
+                    type="openai_compat",
+                    api_key="test-key",
+                    api_base="https://example.test/v1",
+                    default_model="test-model",
+                ),
+                compaction_threshold_tokens=100,
+                compaction_recent_tokens=100,
             )

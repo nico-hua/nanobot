@@ -161,7 +161,9 @@ class NanobotFileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace: Path
-    max_history_tokens: int = Field(default=64_000, ge=0)
+    context_window_tokens: int = Field(default=128_000, gt=0)
+    compaction_threshold_tokens: int = Field(default=64_000, gt=0)
+    compaction_recent_tokens: int = Field(default=32_000, ge=0)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     provider: ProviderSettingsConfig
     default_channel: str = "qq"
@@ -174,6 +176,14 @@ class NanobotFileConfig(BaseModel):
             raise ValueError("must not be blank")
         return value
 
+    @model_validator(mode="after")
+    def _validate_compaction_budgets(self) -> NanobotFileConfig:
+        if self.compaction_recent_tokens >= self.compaction_threshold_tokens:
+            raise ValueError(
+                "compaction_recent_tokens must be less than compaction_threshold_tokens"
+            )
+        return self
+
 
 class NanobotConfig(BaseModel):
     """Resolved runtime configuration after merging file and secret settings."""
@@ -182,7 +192,17 @@ class NanobotConfig(BaseModel):
 
     provider: ProviderConfig
     workspace: Path | None = None
-    max_history_tokens: int = Field(default=64_000, ge=0)
+    context_window_tokens: int = Field(default=128_000, gt=0)
+    compaction_threshold_tokens: int = Field(default=64_000, gt=0)
+    compaction_recent_tokens: int = Field(default=32_000, ge=0)
     default_channel: str = "qq"
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None
+
+    @model_validator(mode="after")
+    def _validate_compaction_budgets(self) -> NanobotConfig:
+        if self.compaction_recent_tokens >= self.compaction_threshold_tokens:
+            raise ValueError(
+                "compaction_recent_tokens must be less than compaction_threshold_tokens"
+            )
+        return self

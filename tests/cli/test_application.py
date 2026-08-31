@@ -90,6 +90,9 @@ class RecordingLoop:
     def finish(self) -> None:
         self._finish.set()
 
+    async def close(self) -> None:
+        self.events.append("loop.background.close")
+
 
 class RecordingChannel(FakeChannel):
     def __init__(self, name: str, message_bus: MessageBus, events: list[str]) -> None:
@@ -198,9 +201,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             registry: ToolRegistry,
             session_manager: Any,
             context_builder: ContextBuilder,
+            session_compactor: Any,
             bus: MessageBus,
         ) -> RecordingLoop:
-            del runner, provider, registry, session_manager
+            del runner, provider, registry, session_manager, session_compactor
             received_context_builders.append(context_builder)
             return _configure_loop(loop, bus)
 
@@ -231,7 +235,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events[0], "mcp.connect")
         self.assertCountEqual(events[1:3], ["channel.start", "loop.start"])
-        self.assertEqual(events[-3:], ["channel.close", "loop.close", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["channel.close", "loop.close", "loop.background.close", "mcp.close"],
+        )
         self.assertFalse(app.channel_manager.dispatcher_running)
         self.assertIsNone(app.agent_task)
         self.assertTrue(agent_task.cancelled() if agent_task is not None else False)
@@ -258,7 +265,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -270,6 +277,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             "loop.start",
             "channel.close",
             "loop.close",
+            "loop.background.close",
             "mcp.close",
         ])
         self.assertIsNone(app.agent_task)
@@ -287,7 +295,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -295,7 +303,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         app.request_stop()
         await asyncio.wait_for(task, timeout=1)
 
-        self.assertEqual(events[-3:], ["channel.close", "loop.close", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["channel.close", "loop.close", "loop.background.close", "mcp.close"],
+        )
 
     async def test_start_returns_while_the_background_tasks_keep_running(self) -> None:
         events: list[str] = []
@@ -324,7 +335,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "agent loop failed"):
             await asyncio.wait_for(run_task, timeout=1)
 
-        self.assertEqual(events[-3:], ["loop.close", "channel_manager.stop", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["loop.close", "channel_manager.stop", "loop.background.close", "mcp.close"],
+        )
         self.assertEqual(manager.stop_calls, 1)
 
     async def test_channel_manager_failure_stops_the_application(self) -> None:
@@ -340,7 +354,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "dispatcher failed"):
             await asyncio.wait_for(run_task, timeout=1)
 
-        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["channel_manager.stop", "loop.close", "loop.background.close", "mcp.close"],
+        )
 
     async def test_unexpected_agent_loop_completion_stops_the_application(self) -> None:
         events: list[str] = []
@@ -355,7 +372,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "AgentLoop stopped unexpectedly"):
             await asyncio.wait_for(run_task, timeout=1)
 
-        self.assertEqual(events[-3:], ["loop.close", "channel_manager.stop", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["loop.close", "channel_manager.stop", "loop.background.close", "mcp.close"],
+        )
 
     async def test_start_failure_releases_started_agent_and_mcp_resources(self) -> None:
         events: list[str] = []
@@ -369,7 +389,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "channel manager unavailable"):
             await app.start()
 
-        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["channel_manager.stop", "loop.close", "loop.background.close", "mcp.close"],
+        )
         self.assertEqual(manager.stop_calls, 1)
         self.assertIsNone(app.agent_task)
 
@@ -386,7 +409,10 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(run_task, timeout=1)
 
-        self.assertEqual(events[-3:], ["channel_manager.stop", "loop.close", "mcp.close"])
+        self.assertEqual(
+            events[-4:],
+            ["channel_manager.stop", "loop.close", "loop.background.close", "mcp.close"],
+        )
         self.assertEqual(manager.stop_calls, 1)
 
 
@@ -440,7 +466,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
     )
     return app, managers[0]
