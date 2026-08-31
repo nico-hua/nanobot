@@ -1,6 +1,6 @@
 """Agent orchestration primitives."""
 
-from .loop import AgentLoop, SessionStore
+from .loop import AgentLoop
 from .runner import AgentRunner, AgentRunnerError, AgentRunResult, AgentRunSpec
 
 __all__ = [
@@ -9,5 +9,4 @@ __all__ = [
     "AgentRunSpec",
     "AgentRunner",
     "AgentRunnerError",
-    "SessionStore",
 ]

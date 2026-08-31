@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
@@ -10,6 +11,7 @@ from nanobot.agent import AgentLoop, AgentRunner
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager, FakeChannel
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
+from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolRegistry
 
 
@@ -123,32 +125,34 @@ class ChannelManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent_messages[0].content, "Delivered message.")
 
     async def test_agent_loop_response_reaches_the_fake_channel(self) -> None:
-        bus = MessageBus()
-        channel = NotifyingFakeChannel("fake", bus)
-        manager = ChannelManager(bus, (channel,))
-        loop = AgentLoop(
-            AgentRunner(),
-            ScriptedProvider((LLMResponse(content="Agent answer."),)),
-            ToolRegistry(),
-            message_bus=bus,
-        )
-
-        await manager.start_all()
-        worker = asyncio.create_task(loop.run())
-        try:
-            await channel.receive_external(
-                "Question",
-                "chat-1",
-                "sender-1",
-                "session-1",
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            bus = MessageBus()
+            channel = NotifyingFakeChannel("fake", bus)
+            manager = ChannelManager(bus, (channel,))
+            loop = AgentLoop(
+                AgentRunner(),
+                ScriptedProvider((LLMResponse(content="Agent answer."),)),
+                ToolRegistry(),
+                SessionManager(temporary_directory),
+                message_bus=bus,
             )
-            await asyncio.wait_for(channel.sent_event.wait(), timeout=1)
-        finally:
-            await _cancel_worker(self, worker)
-            await manager.stop_all()
 
-        self.assertEqual(channel.sent_messages[0].content, "Agent answer.")
-        self.assertEqual(channel.sent_messages[0].session_id, "session-1")
+            await manager.start_all()
+            worker = asyncio.create_task(loop.run())
+            try:
+                await channel.receive_external(
+                    "Question",
+                    "chat-1",
+                    "sender-1",
+                    "session-1",
+                )
+                await asyncio.wait_for(channel.sent_event.wait(), timeout=1)
+            finally:
+                await _cancel_worker(self, worker)
+                await manager.stop_all()
+
+            self.assertEqual(channel.sent_messages[0].content, "Agent answer.")
+            self.assertEqual(channel.sent_messages[0].session_id, "session-1")
 
 
 async def _wait_until(predicate: Callable[[], bool]) -> None:

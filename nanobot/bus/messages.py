@@ -65,10 +65,11 @@ def _validate_routing(
         ("channel", channel),
         ("chat_id", chat_id),
         ("sender_id", sender_id),
-        ("session_id", session_id),
     ):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{name} must be a non-empty string")
+    if not isinstance(session_id, str):
+        raise TypeError("session_id must be a string")
 
 
 def _validate_metadata(metadata: Mapping[str, Any]) -> None:

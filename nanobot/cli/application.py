@@ -13,6 +13,7 @@ from ..channels import BaseChannel, ChannelManager, create_default_channel_facto
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
 from ..mcp import MCPProvider
 from ..providers import LLMProvider, create_default_provider_factory
+from ..session import SessionManager
 from ..tools import ToolContext, ToolLoader, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,10 @@ logger = logging.getLogger(__name__)
 ProviderCreator = Callable[[ProviderConfig], LLMProvider]
 ChannelCreator = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
 MCPProviderFactory = Callable[[ToolRegistry, Mapping[str, Any]], MCPProvider]
-AgentLoopFactory = Callable[[AgentRunner, LLMProvider, ToolRegistry, MessageBus], AgentLoop]
+AgentLoopFactory = Callable[
+    [AgentRunner, LLMProvider, ToolRegistry, SessionManager, MessageBus],
+    AgentLoop,
+]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
 
 
@@ -55,6 +59,7 @@ class Application:
             ToolContext(workspace=config.workspace),
         )
         self._provider = provider_factory(config.provider)
+        self._session_manager = SessionManager(config.workspace)
         self._mcp_provider = mcp_provider_factory(
             self._tool_registry,
             config.mcp_servers,
@@ -63,6 +68,7 @@ class Application:
             AgentRunner(),
             self._provider,
             self._tool_registry,
+            self._session_manager,
             self._message_bus,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
@@ -254,11 +260,13 @@ def _create_agent_loop(
     runner: AgentRunner,
     provider: LLMProvider,
     tool_registry: ToolRegistry,
+    session_manager: SessionManager,
     message_bus: MessageBus,
 ) -> AgentLoop:
     return AgentLoop(
         runner,
         provider,
         tool_registry,
+        session_manager,
         message_bus=message_bus,
     )

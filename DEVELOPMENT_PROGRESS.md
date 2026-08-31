@@ -1,5 +1,14 @@
 # 项目开发进度
 
+## 最新 Session 持久化（2026-08-31）
+
+- [x] 新增 `Session`、`SessionManager` 和 JSONL 文件存储：每个会话一个 SHA-256 安全文件名，保存创建/更新时间及完整消息列表，并通过临时文件原子替换保护已有会话。
+- [x] `SessionManager` 默认将运行时会话写入 `<workspace>/sessions/`；`.nanobot/workspace/` 已作为本地运行时数据忽略，不提交会话内容。
+- [x] `Application` 创建共享 `SessionManager` 并注入 `AgentLoop`；Agent 重启后可从 workspace 恢复会话历史。
+- [x] `AgentLoop` 优先使用非空 `session_id` 作为会话键；为空时回退为 `channel:chat_id`。MessageBus 保留该路由字段，并允许空值触发回退。
+- [x] 系统提示词“你是一个有用的助手”作为会话首条消息持久化；用户消息会在模型调用前保存，成功后依序保存 assistant、tool call 与 tool result 消息。
+- [x] 添加会话存储与 Loop 集成测试，覆盖重启恢复、工具消息顺序、会话隔离、空 session ID 回退和执行失败后的历史保留。
+
 ## 最新运行时与 CLI 入口（2026-08-28）
 
 - [x] 实现 `Application` 运行时组装：共享 `MessageBus`、`ToolRegistry`、MCP 动态工具、`AgentLoop` 与基于 `default_channel` 的 ChannelManager。
@@ -15,7 +24,7 @@
 - [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`。
 - [x] OpenAI-compatible 与 Anthropic-compatible Provider 支持初始化默认 `max_tokens` / `temperature`，单次调用的显式参数优先。
 
-最后更新：2026-08-28
+最后更新：2026-08-31
 
 ## 项目目标
 
@@ -71,7 +80,7 @@
 - [x] 添加本地 FastMCP stdio 集成测试：启动真实 MCP Server，通过 `ToolRegistry` 注册并调用 `add_numbers` 工具。
 - [x] 实现最小非流式 `AgentRunner`：调用 `LLMProvider.complete`、顺序执行 `ToolRegistry` 中的工具，并将工具结果作为 `ToolMessage` 回传模型直到得到最终回答。
 - [x] 设计 `AgentRunSpec` 和 `AgentRunResult`：统一运行输入，并返回完整消息历史、已调用工具、累计 token usage 与停止原因。
-- [x] 实现最小单轮 `AgentLoop` 和内存 `SessionStore`：读取 session 历史、追加用户消息、运行 Agent，并仅在成功后保存完整消息历史。
+- [x] 实现 `AgentLoop` 与文件持久化 `SessionManager`：读取 workspace 会话历史、持久化系统/用户/assistant/tool 消息并在 Agent 重启后恢复。
 - [x] 实现基于 `asyncio.Queue` 的内存 `MessageBus`：支持带 channel、chat ID、session ID 的入站/出站消息发布和消费。
 - [x] 将 `AgentLoop.run()` 接入 `MessageBus`：持续消费入站消息、最多等待一秒后继续轮询，并将最终回答发布为出站消息；`process_direct()` 保留单条显式路由消息的直接处理入口。
 - [x] 实现最小 `BaseChannel`、`FakeChannel` 与 `ChannelManager`：Channel 负责外部消息和 `MessageBus` 的转换，Manager 统一管理生命周期并将出站消息路由到目标 Channel。
@@ -80,7 +89,7 @@
 - [x] 增加默认跳过的 QQ → Agent → DeepSeek → 本地工具 → QQ 手工端到端测试：凭据仅从本地 `.env`/环境变量读取，验证模型工具调用、工具结果回传、会话历史和 QQ 文本回复。
 - [x] 增加统一日志基础设施：`nanobot.logging.configure_logging()` 配置包级统一格式与日志级别，默认 `NullHandler` 避免未初始化时的非统一兜底输出。
 - [x] CLI 入口先初始化包级 INFO 兜底日志，再从 `.nanobot/nanobot.json` 的 `logging.level` 配置 `nanobot` 命名空间日志；嵌入式宿主应用可自行选择初始化策略。
-- [x] 在 Agent、Provider、ToolRegistry、MCP、MessageBus、SessionStore 与 Channel 的关键生命周期和异常边界加入不含消息内容、工具参数或凭据的模块级日志；工具/MCP 的意外执行异常保留 traceback，取消信号继续抛出。
+- [x] 在 Agent、Provider、ToolRegistry、MCP、MessageBus 与 Channel 的关键生命周期和异常边界加入不含消息内容、工具参数或凭据的模块级日志；工具/MCP 的意外执行异常保留 traceback，取消信号继续抛出。
 - [x] 新增 `.env.example`、日志 focused tests 与 `AGENTS.md` 的 Logging and Error Handling 开发规范。
 
 ### 当前测试状态
@@ -88,7 +97,7 @@
 最近一次记录的离线测试结果：
 
 ```text
-Ran 159 tests in 4.943s
+Ran 175 tests in 5.197s
 OK (skipped=7)
 ```
 
@@ -147,7 +156,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - `ToolLoader` 稳定发现 builtin 工具，跳过私有模块、抽象类和重复类，并通过 `enabled(context)` / `create(context)` 完成实例化；
 - `ToolContext` 当前仅有 `workspace`，后续可在实际工具需要时增加其他共享依赖。
 
-当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用内存 `SessionStore` 为每个 session 保存成功运行后的完整消息历史；失败时不会覆盖已有历史。
+当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；系统提示词、用户消息、assistant 消息和 tool call/tool result 都会按顺序持久化。用户消息会先保存，Agent 执行失败时已有历史和本轮用户消息仍保留。
 
 当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID 和内容；`AgentLoop.run()` 仅消费总线消息并发布结果，`process_direct()` 则处理一条显式传入的路由消息。总线为空时，Loop 每次最多等待一秒后继续轮询；取消 Loop 不会留下它创建的后台任务。
 
@@ -155,7 +164,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 - 完整 JSON Schema 的运行时校验；
 - 流式、并行工具调度、上下文注入和自动重试；
-- 会话持久化、并发访问控制和长期记忆。
+- 会话并发访问控制、上下文压缩、摘要、TTL 和长期记忆。
 - 除 QQ 文本消息外的真实 Channel、消息重试、可靠投递、总线持久化和消息优先级。
 
 `MCPProvider` 不由 `ToolLoader` 扫描；它在连接 Server 后将 `MCPToolWrapper` 动态注册到同一个 `ToolRegistry`。当前只处理 MCP tools 的文本结果，仍不支持 resources、prompts、OAuth、重连、热加载、图片/二进制结果或连接持久化。
@@ -195,7 +204,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 ## 待解决的问题
 
 1. 如何在不破坏简单 `ToolParameter` 模型的前提下，扩展数组、嵌套对象、枚举和默认值等复杂参数能力。
-2. 是否需要让 `AgentLoop` 支持持久化 session，以及如何定义 session 的并发访问边界。
+2. 如何为 JSONL Session 定义并发访问、损坏文件处理与未来迁移边界。
 3. 如何统一处理不同厂商的流式事件，尤其是文本、工具调用片段、思考内容和最终 usage。
 4. 如何处理 Anthropic、OpenAI 及其他兼容协议在 `max_tokens`、thinking、finish reason 和 usage 字段上的差异。
 5. 是否需要支持多轮工具调用，以及如何保证工具结果、调用 ID 和消息历史的一致性。
@@ -217,6 +226,6 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 ## 下一步建议
 
-1. 为 `SessionStore` 设计持久化接口，并在实际需要时加入 session 并发访问控制。
+1. 为 `SessionManager` 在实际需要时加入 session 并发访问控制、损坏文件处理与迁移策略。
 2. 扩展 QQ Channel 的错误处理和路由测试，或在相同 `BaseChannel` 边界上接入下一个真实 Channel。
 3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。

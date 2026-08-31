@@ -1,29 +1,27 @@
-"""Focused tests for one-turn AgentLoop orchestration."""
+"""Integration tests for AgentLoop session persistence."""
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from nanobot.agent import (
-    AgentLoop,
-    AgentRunner,
-    AgentRunnerError,
-    AgentRunResult,
-    AgentRunSpec,
-    SessionStore,
-)
+from nanobot.agent import AgentLoop, AgentRunner, AgentRunnerError, AgentRunResult, AgentRunSpec
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
     HumanMessage,
     LLMProvider,
     LLMResponse,
+    SystemMessage,
     ToolCallRequest,
     ToolMessage,
 )
+from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
+
+_SYSTEM_MESSAGE = SystemMessage(content="你是一个有用的助手")
 
 
 class ScriptedProvider(LLMProvider):
@@ -82,28 +80,21 @@ class FailingRunner(AgentRunner):
 
 
 class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
-    async def test_passes_the_user_message_to_the_runner(self) -> None:
-        provider = ScriptedProvider((LLMResponse(content="Hello."),))
-        session_store = SessionStore()
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), session_store)
+    def setUp(self) -> None:
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self._sessions = SessionManager(self._temporary_directory.name)
 
-        result = await loop.process_direct("Hello", "test", "chat-1", "session-1")
+    def tearDown(self) -> None:
+        self._temporary_directory.cleanup()
 
-        self.assertEqual(result.content, "Hello.")
-        self.assertEqual(
-            provider.complete_calls,
-            [(HumanMessage(content="Hello"),)],
-        )
-
-    async def test_includes_saved_history_in_the_next_request(self) -> None:
+    async def test_continuous_messages_use_the_session_id_and_persist_the_system_prompt(self) -> None:
         provider = ScriptedProvider(
             (
                 LLMResponse(content="First answer."),
                 LLMResponse(content="Second answer."),
             )
         )
-        session_store = SessionStore()
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), session_store)
+        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions)
 
         await loop.process_direct("First question.", "test", "chat-1", "session-1")
         await loop.process_direct("Second question.", "test", "chat-1", "session-1")
@@ -111,13 +102,52 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             provider.complete_calls[1],
             (
+                _SYSTEM_MESSAGE,
+                HumanMessage(content="First question."),
+                AIMessage(content="First answer."),
+                HumanMessage(content="Second question."),
+            ),
+        )
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                _SYSTEM_MESSAGE,
+                HumanMessage(content="First question."),
+                AIMessage(content="First answer."),
+                HumanMessage(content="Second question."),
+                AIMessage(content="Second answer."),
+            ),
+        )
+
+    async def test_recreated_loop_recovers_history_from_the_workspace(self) -> None:
+        first_loop = AgentLoop(
+            AgentRunner(),
+            ScriptedProvider((LLMResponse(content="First answer."),)),
+            ToolRegistry(),
+            self._sessions,
+        )
+        await first_loop.process_direct("First question.", "test", "chat-1", "session-1")
+
+        provider = ScriptedProvider((LLMResponse(content="Second answer."),))
+        recreated_loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            SessionManager(self._temporary_directory.name),
+        )
+        await recreated_loop.process_direct("Second question.", "test", "chat-1", "session-1")
+
+        self.assertEqual(
+            provider.complete_calls[0],
+            (
+                _SYSTEM_MESSAGE,
                 HumanMessage(content="First question."),
                 AIMessage(content="First answer."),
                 HumanMessage(content="Second question."),
             ),
         )
 
-    async def test_saves_complete_messages_including_tool_call_history(self) -> None:
+    async def test_persists_tool_calls_and_results_in_execution_order(self) -> None:
         request = ToolCallRequest(
             id="call-1",
             name="echo",
@@ -129,25 +159,19 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
                 LLMResponse(content="The value was echoed."),
             )
         )
-        session_store = SessionStore()
         loop = AgentLoop(
             AgentRunner(),
             provider,
             ToolRegistry((EchoTool(),)),
-            session_store,
+            self._sessions,
         )
 
-        result = await loop.process_direct(
-            "Echo hello.",
-            "test",
-            "chat-1",
-            "session-1",
-        )
+        await loop.process_direct("Echo hello.", "test", "chat-1", "session-1")
 
-        self.assertEqual(session_store.load("session-1"), result.messages)
         self.assertEqual(
-            result.messages,
+            self._sessions.get_or_create("session-1").messages,
             (
+                _SYSTEM_MESSAGE,
                 HumanMessage(content="Echo hello."),
                 AIMessage(content="I will echo it.", tool_calls=(request,)),
                 ToolMessage(content="echo: hello", tool_call_id="call-1"),
@@ -155,23 +179,55 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_does_not_save_new_messages_when_the_runner_fails(self) -> None:
+    async def test_empty_session_id_falls_back_to_channel_and_chat_id(self) -> None:
+        provider = ScriptedProvider(
+            (
+                LLMResponse(content="First answer."),
+                LLMResponse(content="Second answer."),
+            )
+        )
+        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions)
+
+        await loop.process_direct("First question.", "alpha", "chat-1", "")
+        await loop.process_direct("Second question.", "beta", "chat-1", "")
+
+        self.assertEqual(
+            provider.complete_calls[1],
+            (_SYSTEM_MESSAGE, HumanMessage(content="Second question.")),
+        )
+        self.assertEqual(
+            self._sessions.get_or_create("alpha:chat-1").messages,
+            (
+                _SYSTEM_MESSAGE,
+                HumanMessage(content="First question."),
+                AIMessage(content="First answer."),
+            ),
+        )
+        self.assertEqual(
+            self._sessions.get_or_create("beta:chat-1").messages,
+            (
+                _SYSTEM_MESSAGE,
+                HumanMessage(content="Second question."),
+                AIMessage(content="Second answer."),
+            ),
+        )
+
+    async def test_runner_failure_keeps_existing_history_and_the_saved_user_message(self) -> None:
         previous_history = (HumanMessage(content="Previous question."),)
-        session_store = SessionStore()
-        session_store.save("session-1", previous_history)
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_messages(previous_history)
+        )
         runner = FailingRunner()
-        loop = AgentLoop(runner, ScriptedProvider(()), ToolRegistry(), session_store)
+        loop = AgentLoop(runner, ScriptedProvider(()), ToolRegistry(), self._sessions)
 
         with self.assertRaisesRegex(AgentRunnerError, "model unavailable"):
-            await loop.process_direct(
-                "New question.",
-                "test",
-                "chat-1",
-                "session-1",
-            )
+            await loop.process_direct("New question.", "test", "chat-1", "session-1")
 
-        self.assertEqual(session_store.load("session-1"), previous_history)
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (_SYSTEM_MESSAGE, *previous_history, HumanMessage(content="New question.")),
+        )
         self.assertEqual(
             runner.received_spec.messages if runner.received_spec is not None else None,
-            (*previous_history, HumanMessage(content="New question.")),
+            (_SYSTEM_MESSAGE, *previous_history, HumanMessage(content="New question.")),
         )

@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
 
-from nanobot.agent import AgentLoop, AgentRunner, SessionStore
+from nanobot.agent import AgentLoop, AgentRunner
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager
 from nanobot.channels.qq import QQChannel
@@ -39,12 +39,8 @@ from nanobot.config import (
     get_env_value,
     load_nanobot_config,
 )
-from nanobot.providers import (
-    BaseMessage,
-    OpenAICompatProvider,
-    SystemMessage,
-    ToolMessage,
-)
+from nanobot.providers import OpenAICompatProvider, ToolMessage
+from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
 _RUN_LIVE_TESTS = get_env_value("NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS") == "1"
@@ -54,23 +50,6 @@ _QQ_ALLOW_FROM = get_env_value("NANOBOT_QQ_ALLOW_FROM") or "*"
 _TIMEOUT_SECONDS = float(
     get_env_value("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS") or "180"
 )
-
-
-class _PromptedSessionStore(SessionStore):
-    """Add one deterministic tool-use instruction to new live-test sessions."""
-
-    def load(self, session_id: str) -> tuple[BaseMessage, ...]:
-        messages = super().load(session_id)
-        if messages:
-            return messages
-        return (
-            SystemMessage(
-                content=(
-                    "For weather requests, call get_weather exactly once before "
-                    "answering. After receiving its result, answer concisely in Chinese."
-                )
-            ),
-        )
 
 
 class _WeatherTool(Tool):
@@ -137,9 +116,11 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
             self.skipTest("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS must be positive")
         if config.provider.type != "openai_compat":
             self.skipTest("The QQ DeepSeek live test requires an openai_compat provider")
+        if config.workspace is None:
+            self.skipTest("The QQ DeepSeek live test requires a configured workspace")
 
         self._bus = MessageBus()
-        self._sessions = _PromptedSessionStore()
+        self._sessions = SessionManager(config.workspace)
         self._weather = _WeatherTool()
         self._channel = _ReplyTrackingQQChannel(
             "qq",
@@ -161,7 +142,7 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
                 default_temperature=config.provider.default_temperature,
             ),
             tool_registry=ToolRegistry((self._weather,)),
-            session_store=self._sessions,
+            session_manager=self._sessions,
             message_bus=self._bus,
         )
         self._loop_task: asyncio.Task[None] | None = None
@@ -187,7 +168,7 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outbound.channel, "qq")
         self.assertTrue(outbound.content.strip())
 
-        history = self._sessions.load(outbound.session_id)
+        history = self._sessions.get_or_create(f"{outbound.channel}:{outbound.chat_id}").messages
         self.assertTrue(
             any(isinstance(message, ToolMessage) for message in history),
             "The tool result was not retained in the Agent session history",

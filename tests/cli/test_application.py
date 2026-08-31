@@ -197,7 +197,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             channel_factory=channel_factory,
             mcp_provider_factory=mcp_factory,
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, bus: _configure_loop(
+            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: _configure_loop(
                 loop,
                 bus,
             ),
@@ -247,7 +247,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -276,7 +276,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -429,7 +429,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
     )
     return app, managers[0]
