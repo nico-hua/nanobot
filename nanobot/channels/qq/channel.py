@@ -193,7 +193,12 @@ def _create_botpy_client(channel: QQChannel) -> Any:
         async def on_group_at_message_create(self, message: Any) -> None:
             await channel.handle_group_at_message(message)
 
-    return BotPyQQClient(botpy.Intents(public_messages=True))
+    # qq-botpy enables a rotating ``botpy.log`` file by default.
+    return BotPyQQClient(
+        botpy.Intents(public_messages=True),
+        bot_log=False,
+        ext_handlers=False,
+    )
 
 
 def _context_key(message: InboundMessage | OutboundMessage) -> tuple[str, str, str]:

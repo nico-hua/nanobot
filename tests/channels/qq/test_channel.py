@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels.qq import QQChannel
+from nanobot.channels.qq.channel import _create_botpy_client
 from nanobot.config import QQChannelConfig
 
 
@@ -38,6 +40,20 @@ class FakeQQClient:
     async def close(self) -> None:
         self.closed = True
         self._closed_event.set()
+
+
+class FakeBotPyIntents:
+    def __init__(self, *, public_messages: bool) -> None:
+        self.public_messages = public_messages
+
+
+class FakeBotPySDKClient:
+    instances: list[FakeBotPySDKClient] = []
+
+    def __init__(self, *arguments, **keyword_arguments) -> None:
+        self.arguments = arguments
+        self.keyword_arguments = keyword_arguments
+        self.instances.append(self)
 
 
 def c2c_event(
@@ -167,6 +183,23 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
             channel = QQChannel("qq", bus, QQChannelConfig(app_id="app", secret="secret"))
             with self.assertRaisesRegex(RuntimeError, "qq-botpy is required"):
                 await channel.start()
+
+    async def test_sdk_client_disables_botpy_file_logging(self) -> None:
+        FakeBotPySDKClient.instances.clear()
+        fake_botpy = SimpleNamespace(
+            Client=FakeBotPySDKClient,
+            Intents=FakeBotPyIntents,
+        )
+        with patch.dict(sys.modules, {"botpy": fake_botpy}):
+            client = _create_botpy_client(_channel(MessageBus()))
+
+        self.assertIsInstance(client.arguments[0], FakeBotPyIntents)
+        self.assertTrue(client.arguments[0].public_messages)
+        self.assertEqual(
+            client.keyword_arguments,
+            {"bot_log": False, "ext_handlers": False},
+        )
+
 
 
 def _channel(
