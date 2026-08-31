@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from .config import DEFAULT_CONFIG_PATH, load_file_config
+from ..config import DEFAULT_CONFIG_PATH, load_file_config
 
 DEFAULT_LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"

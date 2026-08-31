@@ -30,7 +30,7 @@ class AgentRunSpec:
     messages: Sequence[BaseMessage]
     provider: LLMProvider
     tool_registry: ToolRegistry
-    max_iterations: int = 10
+    max_iterations: int = 30
 
     def __post_init__(self) -> None:
         if not isinstance(self.messages, Sequence) or not all(

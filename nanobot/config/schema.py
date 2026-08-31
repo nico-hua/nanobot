@@ -161,6 +161,7 @@ class NanobotFileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace: Path
+    max_history_tokens: int = Field(default=64_000, ge=0)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     provider: ProviderSettingsConfig
     default_channel: str = "qq"
@@ -181,6 +182,7 @@ class NanobotConfig(BaseModel):
 
     provider: ProviderConfig
     workspace: Path | None = None
+    max_history_tokens: int = Field(default=64_000, ge=0)
     default_channel: str = "qq"
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None

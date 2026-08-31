@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nanobot.logging import (
+from nanobot.agent.logging import (
     DEFAULT_LOG_FORMAT,
     configure_logging,
     configure_logging_from_config,

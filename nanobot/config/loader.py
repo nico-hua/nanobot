@@ -69,6 +69,7 @@ def load_nanobot_config(
 
     return NanobotConfig(
         workspace=workspace,
+        max_history_tokens=file_config.max_history_tokens,
         default_channel=file_config.default_channel,
         mcp_servers=file_config.mcp_servers,
         qq=_load_qq_config(env_path),

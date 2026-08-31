@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
-from nanobot.agent import AgentLoop, AgentRunner
+from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager, FakeChannel
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
@@ -134,6 +134,7 @@ class ChannelManagerTest(unittest.IsolatedAsyncioTestCase):
                 ScriptedProvider((LLMResponse(content="Agent answer."),)),
                 ToolRegistry(),
                 SessionManager(temporary_directory),
+                ContextBuilder(temporary_directory),
                 message_bus=bus,
             )
 

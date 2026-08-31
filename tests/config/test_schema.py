@@ -108,3 +108,16 @@ class NanobotConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(config.default_channel, "qq")
+        self.assertEqual(config.max_history_tokens, 64_000)
+
+    def test_rejects_a_negative_history_token_budget(self) -> None:
+        with self.assertRaises(ValidationError):
+            NanobotConfig(
+                provider=ProviderConfig(
+                    type="openai_compat",
+                    api_key="test-key",
+                    api_base="https://example.test/v1",
+                    default_model="test-model",
+                ),
+                max_history_tokens=-1,
+            )

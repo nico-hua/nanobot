@@ -9,8 +9,8 @@ import signal
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from ..agent.logging import configure_logging, configure_logging_from_config
 from ..config import DEFAULT_CONFIG_PATH, NanobotConfig, load_nanobot_config
-from ..logging import configure_logging, configure_logging_from_config
 from .application import Application
 
 logger = logging.getLogger(__name__)

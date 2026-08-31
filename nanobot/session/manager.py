@@ -13,7 +13,14 @@ class SessionManager:
     """Create, save, delete, and list sessions in a workspace's sessions directory."""
 
     def __init__(self, workspace: str | Path) -> None:
-        self._storage = JsonlSessionStorage(Path(workspace) / "sessions")
+        self._workspace = Path(workspace)
+        self._storage = JsonlSessionStorage(self._workspace / "sessions")
+
+    @property
+    def workspace(self) -> Path:
+        """Return the workspace that owns this manager's session storage."""
+
+        return self._workspace
 
     def get_or_create(self, session_key: str) -> Session:
         """Load a saved session or return a new empty session for the key."""

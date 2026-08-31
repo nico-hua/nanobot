@@ -29,7 +29,7 @@ from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
 
-from nanobot.agent import AgentLoop, AgentRunner
+from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager
 from nanobot.channels.qq import QQChannel
@@ -143,6 +143,10 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
             ),
             tool_registry=ToolRegistry((self._weather,)),
             session_manager=self._sessions,
+            context_builder=ContextBuilder(
+                config.workspace,
+                config.max_history_tokens,
+            ),
             message_bus=self._bus,
         )
         self._loop_task: asyncio.Task[None] | None = None

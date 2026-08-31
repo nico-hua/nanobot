@@ -16,13 +16,13 @@ from nanobot.config import QQChannelConfig
 
 class FakeQQAPI:
     def __init__(self) -> None:
-        self.c2c_calls: list[dict[str, str | int | None]] = []
-        self.group_calls: list[dict[str, str | int | None]] = []
+        self.c2c_calls: list[dict[str, object]] = []
+        self.group_calls: list[dict[str, object]] = []
 
-    async def post_c2c_message(self, **arguments: str | int | None) -> None:
+    async def post_c2c_message(self, **arguments: object) -> None:
         self.c2c_calls.append(arguments)
 
-    async def post_group_message(self, **arguments: str | int | None) -> None:
+    async def post_group_message(self, **arguments: object) -> None:
         self.group_calls.append(arguments)
 
 
@@ -113,7 +113,7 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inbound.metadata["message_id"], "group-message-1")
         self.assertEqual(inbound.metadata["qq_chat_type"], "group")
 
-    async def test_sends_text_with_the_matching_qq_api(self) -> None:
+    async def test_sends_markdown_with_the_matching_qq_api(self) -> None:
         bus = MessageBus()
         client = FakeQQClient()
         channel = _channel(bus, client)
@@ -131,7 +131,8 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "openid": "user-1",
-                    "content": "C2C reply",
+                    "msg_type": 2,
+                    "markdown": {"content": "C2C reply"},
                     "msg_id": "c2c-message-1",
                 }
             ],
@@ -141,7 +142,8 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "group_openid": "group-1",
-                    "content": "Group reply",
+                    "msg_type": 2,
+                    "markdown": {"content": "Group reply"},
                     "msg_id": "group-message-1",
                 }
             ],

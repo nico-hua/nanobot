@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..agent import AgentLoop, AgentRunner
+from ..agent import AgentLoop, AgentRunner, ContextBuilder
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
@@ -22,7 +22,7 @@ ProviderCreator = Callable[[ProviderConfig], LLMProvider]
 ChannelCreator = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
 MCPProviderFactory = Callable[[ToolRegistry, Mapping[str, Any]], MCPProvider]
 AgentLoopFactory = Callable[
-    [AgentRunner, LLMProvider, ToolRegistry, SessionManager, MessageBus],
+    [AgentRunner, LLMProvider, ToolRegistry, SessionManager, ContextBuilder, MessageBus],
     AgentLoop,
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
@@ -60,6 +60,10 @@ class Application:
         )
         self._provider = provider_factory(config.provider)
         self._session_manager = SessionManager(config.workspace)
+        self._context_builder = ContextBuilder(
+            config.workspace,
+            config.max_history_tokens,
+        )
         self._mcp_provider = mcp_provider_factory(
             self._tool_registry,
             config.mcp_servers,
@@ -69,6 +73,7 @@ class Application:
             self._provider,
             self._tool_registry,
             self._session_manager,
+            self._context_builder,
             self._message_bus,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
@@ -261,6 +266,7 @@ def _create_agent_loop(
     provider: LLMProvider,
     tool_registry: ToolRegistry,
     session_manager: SessionManager,
+    context_builder: ContextBuilder,
     message_bus: MessageBus,
 ) -> AgentLoop:
     return AgentLoop(
@@ -268,5 +274,6 @@ def _create_agent_loop(
         provider,
         tool_registry,
         session_manager,
+        context_builder,
         message_bus=message_bus,
     )

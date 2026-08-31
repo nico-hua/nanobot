@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
-from nanobot.agent import AgentLoop, AgentRunner
+from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
 from nanobot.session import SessionManager
@@ -65,7 +65,14 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
     async def test_consumes_an_inbound_message_and_publishes_its_response(self) -> None:
         bus = MessageBus()
         provider = ScriptedProvider((LLMResponse(content="Hello back."),))
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions, message_bus=bus)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
         inbound = InboundMessage("test", "chat-1", "sender-1", "", "Hello")
 
         await bus.publish_inbound(inbound)
@@ -94,7 +101,14 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
                 LLMResponse(content="Answer two."),
             )
         )
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions, message_bus=bus)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
         await bus.publish_inbound(
             InboundMessage("test", "chat-1", "sender-1", "one", "First")
         )
@@ -120,6 +134,7 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
             ScriptedProvider(()),
             ToolRegistry(),
             self._sessions,
+            ContextBuilder(self._temporary_directory.name),
             message_bus=bus,
         )
         worker = asyncio.create_task(loop.run())

@@ -1,5 +1,17 @@
 # 项目开发进度
 
+## 最新上下文构建、历史裁剪与 QQ 输出（2026-08-31）
+
+- [x] 将 `ContextBuilder` 和日志初始化模块归入 `nanobot/agent/`；`Application` 负责基于 workspace 与配置创建 `ContextBuilder`，再显式注入 `AgentLoop`。
+- [x] `ContextBuilder` 每次请求时读取 workspace 的 `AGENTS.md`、`SOUL.md`、`USER.md`，以固定顺序构建 system prompt；文件不存在、为空或无法读取时跳过。
+- [x] system prompt 不再保存到 JSONL Session。`AgentLoop` 每轮动态构建它，并在处理旧会话时过滤遗留的 system message；Session 继续完整保存 user、assistant、tool call 和 tool result 消息。
+- [x] 在 `.nanobot/nanobot.json` 增加顶层 `max_history_tokens`，当前配置为 `64000`。该预算只限制发送给模型的历史消息，不会裁掉 system prompt 或当前用户消息。
+- [x] 实现无额外依赖的稳定 token 估算：按文本字符、消息结构和 tool call 的稳定 JSON 参数估算；裁剪按完整 user turn 从最近向前保留，避免截断 tool call/tool result 链。
+- [x] QQ Channel 的 C2C 和群聊回复改用 QQ 原生 Markdown 消息格式；qq-botpy 的默认文件日志已关闭，避免继续生成 `botpy.log`。
+- [x] 最近全量离线测试：`191 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
+本阶段仍不实现真实 tokenizer、历史摘要压缩、长期记忆、`compacted_until` 或自动压缩。
+
 ## 最新 Session 持久化（2026-08-31）
 
 - [x] 新增 `Session`、`SessionManager` 和 JSONL 文件存储：每个会话一个 SHA-256 安全文件名，保存创建/更新时间及完整消息列表，并通过临时文件原子替换保护已有会话。

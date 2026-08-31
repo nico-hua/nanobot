@@ -5,9 +5,18 @@ from __future__ import annotations
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
 from typing import Any
 
-from nanobot.agent import AgentLoop, AgentRunner, AgentRunnerError, AgentRunResult, AgentRunSpec
+from nanobot.agent import (
+    AgentLoop,
+    AgentRunner,
+    AgentRunnerError,
+    AgentRunResult,
+    AgentRunSpec,
+    ContextBuilder,
+    estimate_messages_tokens,
+)
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -20,8 +29,6 @@ from nanobot.providers import (
 )
 from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
-
-_SYSTEM_MESSAGE = SystemMessage(content="你是一个有用的助手")
 
 
 class ScriptedProvider(LLMProvider):
@@ -87,14 +94,20 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         self._temporary_directory.cleanup()
 
-    async def test_continuous_messages_use_the_session_id_and_persist_the_system_prompt(self) -> None:
+    async def test_continuous_messages_use_the_session_id_without_persisting_the_system_prompt(self) -> None:
         provider = ScriptedProvider(
             (
                 LLMResponse(content="First answer."),
                 LLMResponse(content="Second answer."),
             )
         )
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
 
         await loop.process_direct("First question.", "test", "chat-1", "session-1")
         await loop.process_direct("Second question.", "test", "chat-1", "session-1")
@@ -102,7 +115,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             provider.complete_calls[1],
             (
-                _SYSTEM_MESSAGE,
+                _system_message(self._temporary_directory.name),
                 HumanMessage(content="First question."),
                 AIMessage(content="First answer."),
                 HumanMessage(content="Second question."),
@@ -111,7 +124,6 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
             (
-                _SYSTEM_MESSAGE,
                 HumanMessage(content="First question."),
                 AIMessage(content="First answer."),
                 HumanMessage(content="Second question."),
@@ -125,6 +137,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ScriptedProvider((LLMResponse(content="First answer."),)),
             ToolRegistry(),
             self._sessions,
+            _context_builder(self._temporary_directory.name),
         )
         await first_loop.process_direct("First question.", "test", "chat-1", "session-1")
 
@@ -134,13 +147,14 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             provider,
             ToolRegistry(),
             SessionManager(self._temporary_directory.name),
+            _context_builder(self._temporary_directory.name),
         )
         await recreated_loop.process_direct("Second question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[0],
             (
-                _SYSTEM_MESSAGE,
+                _system_message(self._temporary_directory.name),
                 HumanMessage(content="First question."),
                 AIMessage(content="First answer."),
                 HumanMessage(content="Second question."),
@@ -164,6 +178,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             provider,
             ToolRegistry((EchoTool(),)),
             self._sessions,
+            _context_builder(self._temporary_directory.name),
         )
 
         await loop.process_direct("Echo hello.", "test", "chat-1", "session-1")
@@ -171,7 +186,6 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
             (
-                _SYSTEM_MESSAGE,
                 HumanMessage(content="Echo hello."),
                 AIMessage(content="I will echo it.", tool_calls=(request,)),
                 ToolMessage(content="echo: hello", tool_call_id="call-1"),
@@ -186,19 +200,24 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
                 LLMResponse(content="Second answer."),
             )
         )
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
 
         await loop.process_direct("First question.", "alpha", "chat-1", "")
         await loop.process_direct("Second question.", "beta", "chat-1", "")
 
         self.assertEqual(
             provider.complete_calls[1],
-            (_SYSTEM_MESSAGE, HumanMessage(content="Second question.")),
+            (_system_message(self._temporary_directory.name), HumanMessage(content="Second question.")),
         )
         self.assertEqual(
             self._sessions.get_or_create("alpha:chat-1").messages,
             (
-                _SYSTEM_MESSAGE,
                 HumanMessage(content="First question."),
                 AIMessage(content="First answer."),
             ),
@@ -206,7 +225,6 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self._sessions.get_or_create("beta:chat-1").messages,
             (
-                _SYSTEM_MESSAGE,
                 HumanMessage(content="Second question."),
                 AIMessage(content="Second answer."),
             ),
@@ -218,16 +236,185 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             self._sessions.get_or_create("session-1").with_messages(previous_history)
         )
         runner = FailingRunner()
-        loop = AgentLoop(runner, ScriptedProvider(()), ToolRegistry(), self._sessions)
+        loop = AgentLoop(
+            runner,
+            ScriptedProvider(()),
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
 
         with self.assertRaisesRegex(AgentRunnerError, "model unavailable"):
             await loop.process_direct("New question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
-            (_SYSTEM_MESSAGE, *previous_history, HumanMessage(content="New question.")),
+            (*previous_history, HumanMessage(content="New question.")),
         )
         self.assertEqual(
             runner.received_spec.messages if runner.received_spec is not None else None,
-            (_SYSTEM_MESSAGE, *previous_history, HumanMessage(content="New question.")),
+            (
+                _system_message(self._temporary_directory.name),
+                *previous_history,
+                HumanMessage(content="New question."),
+            ),
         )
+
+    async def test_rebuilds_the_system_prompt_for_each_request(self) -> None:
+        soul_path = Path(self._temporary_directory.name) / "SOUL.md"
+        soul_path.write_text("First style.", encoding="utf-8")
+        provider = ScriptedProvider(
+            (
+                LLMResponse(content="First answer."),
+                LLMResponse(content="Second answer."),
+            )
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
+
+        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        soul_path.write_text("Second style.", encoding="utf-8")
+        await loop.process_direct("Second question.", "test", "chat-1", "session-1")
+
+        first_system_message = provider.complete_calls[0][0]
+        second_system_message = provider.complete_calls[1][0]
+        self.assertIsInstance(first_system_message, SystemMessage)
+        self.assertIsInstance(second_system_message, SystemMessage)
+        self.assertIn("First style.", first_system_message.content)
+        self.assertIn("Second style.", second_system_message.content)
+        self.assertNotIn("First style.", second_system_message.content)
+        self.assertFalse(
+            any(
+                isinstance(message, SystemMessage)
+                for message in self._sessions.get_or_create("session-1").messages
+            )
+        )
+
+    async def test_replaces_a_legacy_persisted_system_message(self) -> None:
+        previous_history = (
+            SystemMessage(content="Legacy system prompt."),
+            HumanMessage(content="Previous question."),
+        )
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_messages(previous_history)
+        )
+        provider = ScriptedProvider((LLMResponse(content="New answer."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
+
+        await loop.process_direct("New question.", "test", "chat-1", "session-1")
+
+        self.assertEqual(
+            provider.complete_calls[0],
+            (
+                _system_message(self._temporary_directory.name),
+                HumanMessage(content="Previous question."),
+                HumanMessage(content="New question."),
+            ),
+        )
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                HumanMessage(content="Previous question."),
+                HumanMessage(content="New question."),
+                AIMessage(content="New answer."),
+            ),
+        )
+
+    async def test_trims_only_the_llm_context_and_preserves_complete_session_history(self) -> None:
+        older_turn = (
+            HumanMessage(content="Older question " * 30),
+            AIMessage(content="Older answer."),
+        )
+        recent_turn = (
+            HumanMessage(content="Recent question."),
+            AIMessage(content="Recent answer."),
+        )
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_messages(
+                (*older_turn, *recent_turn)
+            )
+        )
+        provider = ScriptedProvider((LLMResponse(content="Current answer."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(
+                self._temporary_directory.name,
+                estimate_messages_tokens(recent_turn),
+            ),
+        )
+
+        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+
+        self.assertEqual(
+            provider.complete_calls[0],
+            (
+                _system_message(self._temporary_directory.name),
+                *recent_turn,
+                HumanMessage(content="Current question."),
+            ),
+        )
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                *older_turn,
+                *recent_turn,
+                HumanMessage(content="Current question."),
+                AIMessage(content="Current answer."),
+            ),
+        )
+
+    async def test_recreated_session_manager_still_trims_restored_history(self) -> None:
+        older_turn = (
+            HumanMessage(content="Older question " * 30),
+            AIMessage(content="Older answer."),
+        )
+        recent_turn = (
+            HumanMessage(content="Recent question."),
+            AIMessage(content="Recent answer."),
+        )
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_messages(
+                (*older_turn, *recent_turn)
+            )
+        )
+        provider = ScriptedProvider((LLMResponse(content="Current answer."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            SessionManager(self._temporary_directory.name),
+            _context_builder(
+                self._temporary_directory.name,
+                estimate_messages_tokens(recent_turn),
+            ),
+        )
+
+        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+
+        self.assertEqual(provider.complete_calls[0][1:-1], recent_turn)
+        self.assertEqual(
+            provider.complete_calls[0].count(HumanMessage(content="Current question.")),
+            1,
+        )
+
+
+def _system_message(workspace: str) -> SystemMessage:
+    return SystemMessage(content=ContextBuilder(workspace).build_system_prompt())
+
+
+def _context_builder(workspace: str, history_token_budget: int = 64_000) -> ContextBuilder:
+    return ContextBuilder(workspace, history_token_budget)

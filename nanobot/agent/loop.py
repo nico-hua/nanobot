@@ -6,18 +6,17 @@ import asyncio
 import logging
 
 from ..bus import MessageBus, OutboundMessage
-from ..providers import HumanMessage, LLMProvider, SystemMessage
+from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
 from ..session import SessionManager
 from ..tools import ToolRegistry
+from .context import ContextBuilder
 from .runner import AgentRunner, AgentRunResult, AgentRunSpec
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_SYSTEM_PROMPT = "你是一个有用的助手"
-
 
 class AgentLoop:
-    """Run one message against a persistent session and its system prompt."""
+    """Run one message against a persistent session and fresh system prompt."""
 
     def __init__(
         self,
@@ -25,6 +24,7 @@ class AgentLoop:
         provider: LLMProvider,
         tool_registry: ToolRegistry,
         session_manager: SessionManager,
+        context_builder: ContextBuilder,
         message_bus: MessageBus | None = None,
     ) -> None:
         if not isinstance(runner, AgentRunner):
@@ -35,6 +35,8 @@ class AgentLoop:
             raise TypeError("AgentLoop requires a ToolRegistry")
         if not isinstance(session_manager, SessionManager):
             raise TypeError("AgentLoop requires a SessionManager")
+        if not isinstance(context_builder, ContextBuilder):
+            raise TypeError("AgentLoop requires a ContextBuilder")
         if message_bus is not None and not isinstance(message_bus, MessageBus):
             raise TypeError("AgentLoop message_bus must be a MessageBus")
 
@@ -42,6 +44,7 @@ class AgentLoop:
         self._provider = provider
         self._tool_registry = tool_registry
         self._session_manager = session_manager
+        self._context_builder = context_builder
         self._message_bus = message_bus
 
     async def run(self) -> None:
@@ -103,19 +106,28 @@ class AgentLoop:
         """Persist one user message, run it, then persist the completed history."""
 
         session = self._session_manager.get_or_create(session_key)
-        history = session.messages
-        if not any(isinstance(message, SystemMessage) for message in history):
-            history = (SystemMessage(content=_DEFAULT_SYSTEM_PROMPT), *history)
+        history = _without_system_messages(session.messages)
+        current_message = HumanMessage(content=content)
         session = self._session_manager.save(
-            session.with_messages((*history, HumanMessage(content=content)))
+            session.with_messages((*history, current_message))
         )
         spec = AgentRunSpec(
-            messages=session.messages,
+            messages=self._context_builder.build_request_messages(
+                history,
+                current_message,
+            ),
             provider=self._provider,
             tool_registry=self._tool_registry,
         )
         result = await self._runner.run(spec)
-        self._session_manager.save(session.with_messages(result.messages))
+        self._session_manager.save(
+            session.with_messages(
+                (
+                    *session.messages,
+                    *_without_system_messages(result.messages[len(spec.messages) :]),
+                )
+            )
+        )
         return result
 
 
@@ -132,3 +144,7 @@ def _validate_direct_routing(channel: str, chat_id: str, session_id: str) -> Non
 
 def _session_key(channel: str, chat_id: str, session_id: str) -> str:
     return session_id if session_id.strip() else f"{channel}:{chat_id}"
+
+
+def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMessage, ...]:
+    return tuple(message for message in messages if not isinstance(message, SystemMessage))

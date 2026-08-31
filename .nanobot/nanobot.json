@@ -1,5 +1,6 @@
 {
     "workspace":  "D:\\Github Project\\nanobot\\.nanobot\\workspace",
+    "max_history_tokens": 64000,
     "logging":  {
                     "level":  "INFO"
                 },

@@ -20,6 +20,7 @@ class ConfigLoaderTest(unittest.TestCase):
                 json.dumps(
                     {
                         "workspace": "workspace",
+                        "max_history_tokens": 256,
                         "logging": {"level": "DEBUG"},
                         "provider": {
                             "type": "openai_compat",
@@ -40,6 +41,7 @@ class ConfigLoaderTest(unittest.TestCase):
             config = load_nanobot_config(config_path, env_path)
 
         self.assertEqual(config.workspace, config_path.parent / "workspace")
+        self.assertEqual(config.max_history_tokens, 256)
         self.assertEqual(config.provider.api_key, "test-key")
         self.assertEqual(config.provider.default_model, "test-model")
         self.assertEqual(config.provider.default_max_tokens, 64)

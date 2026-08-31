@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from nanobot.agent import AgentRunner
+from nanobot.agent import AgentRunner, ContextBuilder
 from nanobot.bus import MessageBus
 from nanobot.channels import BaseChannel, ChannelManager, FakeChannel
 from nanobot.cli import Application
@@ -172,6 +172,7 @@ class FakeChannelManager:
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_assembles_shared_dependencies_and_closes_in_reverse_order(self) -> None:
         events: list[str] = []
+        received_context_builders: list[ContextBuilder] = []
         channel: RecordingChannel | None = None
         loop = RecordingLoop(events)
 
@@ -191,16 +192,25 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         ) -> FakeMCPProvider:
             return FakeMCPProvider(registry, servers, events)
 
+        def agent_loop_factory(
+            runner: AgentRunner,
+            provider: LLMProvider,
+            registry: ToolRegistry,
+            session_manager: Any,
+            context_builder: ContextBuilder,
+            bus: MessageBus,
+        ) -> RecordingLoop:
+            del runner, provider, registry, session_manager
+            received_context_builders.append(context_builder)
+            return _configure_loop(loop, bus)
+
         app = Application(
             _config(),
             provider_factory=lambda config: FakeProvider(),
             channel_factory=channel_factory,
             mcp_provider_factory=mcp_factory,
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: _configure_loop(
-                loop,
-                bus,
-            ),
+            agent_loop_factory=agent_loop_factory,
         )
 
         await app.start()
@@ -210,6 +220,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(channel.message_bus if channel is not None else None, app.message_bus)
         self.assertIs(loop.message_bus, app.message_bus)
         self.assertIs(app.mcp_provider.registry, app.tool_registry)
+        self.assertEqual(len(received_context_builders), 1)
         self.assertTrue(app.tool_registry.has("get_weather"))
         self.assertTrue(app.channel_manager.dispatcher_running)
         self.assertIsNotNone(app.agent_task)
@@ -247,7 +258,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -276,7 +287,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -429,7 +440,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, session_manager, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
     )
     return app, managers[0]

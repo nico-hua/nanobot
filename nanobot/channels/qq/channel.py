@@ -26,7 +26,7 @@ class _QQChatContext:
 
 
 class QQChannel(BaseChannel):
-    """Adapt QQ C2C and group @ text messages to the internal bus."""
+    """Adapt QQ C2C and group @ messages to the internal bus."""
 
     def __init__(
         self,
@@ -110,7 +110,7 @@ class QQChannel(BaseChannel):
         return await self._publish_inbound(message, _GROUP, sender_id, chat_id)
 
     async def send(self, message: OutboundMessage) -> None:
-        """Send one text response through the matching QQ text API."""
+        """Send one Markdown response through the matching QQ API."""
 
         self._validate_outbound_message(message)
         if self._client is None:
@@ -127,16 +127,19 @@ class QQChannel(BaseChannel):
             raise ValueError("QQ outbound message requires an originating message_id")
 
         api = self._client.api
+        markdown = {"content": message.content}
         if chat_type == _C2C:
             result = api.post_c2c_message(
                 openid=message.chat_id,
-                content=message.content,
+                msg_type=2,
+                markdown=markdown,
                 msg_id=message_id,
             )
         elif chat_type == _GROUP:
             result = api.post_group_message(
                 group_openid=message.chat_id,
-                content=message.content,
+                msg_type=2,
+                markdown=markdown,
                 msg_id=message_id,
             )
         else:

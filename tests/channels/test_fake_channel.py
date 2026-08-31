@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
-from nanobot.agent import AgentLoop, AgentRunner
+from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import MessageBus
 from nanobot.channels import FakeChannel
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
@@ -67,7 +67,14 @@ class FakeChannelTest(unittest.IsolatedAsyncioTestCase):
         bus = MessageBus()
         channel = FakeChannel("fake", bus)
         provider = ScriptedProvider((LLMResponse(content="Hello back."),))
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions, message_bus=bus)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
         await channel.start()
         await channel.receive_external(
             "Hello",
@@ -94,7 +101,14 @@ class FakeChannelTest(unittest.IsolatedAsyncioTestCase):
         provider = ScriptedProvider(
             (LLMResponse(content="Alpha answer."), LLMResponse(content="Beta answer."))
         )
-        loop = AgentLoop(AgentRunner(), provider, ToolRegistry(), self._sessions, message_bus=bus)
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
         await alpha.receive_external("One", "chat-a", "sender-a", "session-a")
         await beta.receive_external("Two", "chat-b", "sender-b", "session-b")
 
