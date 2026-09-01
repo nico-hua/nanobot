@@ -63,6 +63,11 @@ class Session:
 
         return replace(self, summary=summary, summary_until=summary_until)
 
+    def reset(self) -> Session:
+        """Return the same session identity with all short-term state cleared."""
+
+        return replace(self, messages=(), summary=None, summary_until=0)
+
 
 def _validate_session_key(key: str) -> None:
     if not isinstance(key, str) or not key.strip():

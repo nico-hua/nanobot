@@ -7,6 +7,7 @@ from .context import (
     estimate_messages_tokens,
     estimate_tools_tokens,
 )
+from .commands import CommandContext, CommandInvocation, CommandRouter
 from .loop import AgentLoop
 from .runner import AgentRunner, AgentRunnerError, AgentRunResult, AgentRunSpec
 
@@ -16,6 +17,9 @@ __all__ = [
     "AgentRunSpec",
     "AgentRunner",
     "AgentRunnerError",
+    "CommandContext",
+    "CommandInvocation",
+    "CommandRouter",
     "ContextBuilder",
     "ContextWindowExceededError",
     "estimate_message_tokens",

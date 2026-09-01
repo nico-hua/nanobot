@@ -18,7 +18,7 @@ from nanobot.agent import (
     ContextBuilder,
     estimate_messages_tokens,
 )
-from nanobot.bus import MessageBus
+from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.memory import MemoryConsolidator, MemoryStore
 from nanobot.providers import (
     AIMessage,
@@ -226,8 +226,8 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             _context_builder(self._temporary_directory.name),
         )
 
-        await loop.process_direct("First question.", "test", "chat-1", "session-1")
-        await loop.process_direct("Second question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "First question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Second question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[1],
@@ -256,7 +256,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             self._sessions,
             _context_builder(self._temporary_directory.name),
         )
-        await first_loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await _dispatch(first_loop, "First question.", "test", "chat-1", "session-1")
 
         provider = ScriptedProvider((LLMResponse(content="Second answer."),))
         recreated_loop = AgentLoop(
@@ -266,7 +266,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             SessionManager(self._temporary_directory.name),
             _context_builder(self._temporary_directory.name),
         )
-        await recreated_loop.process_direct("Second question.", "test", "chat-1", "session-1")
+        await _dispatch(recreated_loop, "Second question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[0],
@@ -298,7 +298,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             _context_builder(self._temporary_directory.name),
         )
 
-        await loop.process_direct("Echo hello.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Echo hello.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
@@ -325,8 +325,8 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             _context_builder(self._temporary_directory.name),
         )
 
-        await loop.process_direct("First question.", "alpha", "chat-1", "")
-        await loop.process_direct("Second question.", "beta", "chat-1", "")
+        await _dispatch(loop, "First question.", "alpha", "chat-1", "")
+        await _dispatch(loop, "Second question.", "beta", "chat-1", "")
 
         self.assertEqual(
             provider.complete_calls[1],
@@ -362,7 +362,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaisesRegex(AgentRunnerError, "model unavailable"):
-            await loop.process_direct("New question.", "test", "chat-1", "session-1")
+            await _dispatch(loop, "New question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
@@ -394,9 +394,9 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             _context_builder(self._temporary_directory.name),
         )
 
-        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "First question.", "test", "chat-1", "session-1")
         soul_path.write_text("Second style.", encoding="utf-8")
-        await loop.process_direct("Second question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Second question.", "test", "chat-1", "session-1")
 
         first_system_message = provider.complete_calls[0][0]
         second_system_message = provider.complete_calls[1][0]
@@ -429,7 +429,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             _context_builder(self._temporary_directory.name),
         )
 
-        await loop.process_direct("New question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "New question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[0],
@@ -474,7 +474,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[0],
@@ -520,7 +520,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
 
         self.assertEqual(provider.complete_calls[0][1:-1], recent_turn)
         self.assertEqual(
@@ -574,9 +574,9 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await loop.wait_for_compactions()
-        await loop.process_direct("Next question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Next question.", "test", "chat-1", "session-1")
 
         session = self._sessions.get_or_create("session-1")
         self.assertEqual(
@@ -646,7 +646,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
 
         self.assertEqual(
             provider.complete_calls[0],
@@ -694,7 +694,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        result = await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        result = await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
 
         self.assertEqual(result.content, "Current answer.")
         self.assertEqual(len(provider.complete_calls), 1)
@@ -743,7 +743,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        result = await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        result = await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await loop.wait_for_compactions()
 
         session = self._sessions.get_or_create("session-1")
@@ -790,10 +790,10 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "First question.", "test", "chat-1", "session-1")
         await asyncio.wait_for(provider.summary_started.wait(), timeout=1)
         second_run = asyncio.create_task(
-            loop.process_direct("Second question.", "test", "chat-1", "session-1")
+            _dispatch(loop, "Second question.", "test", "chat-1", "session-1")
         )
         await asyncio.sleep(0)
         self.assertFalse(second_run.done())
@@ -838,7 +838,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             session_compactor=compactor,
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await asyncio.wait_for(provider.summary_started.wait(), timeout=1)
         await loop.close()
 
@@ -872,7 +872,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await asyncio.wait_for(
-            loop.process_direct("Current question.", "test", "chat-1", "session-1"),
+            _dispatch(loop, "Current question.", "test", "chat-1", "session-1"),
             timeout=1,
         )
 
@@ -931,7 +931,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(AgentRunnerError):
-            await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+            await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await asyncio.sleep(0)
 
         self.assertEqual(provider.memory_requests, [])
@@ -953,7 +953,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             memory_consolidator=MemoryConsolidator(provider, store),
         )
 
-        result = await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        result = await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await loop.wait_for_memory_consolidations()
 
         self.assertEqual(result.content, "Current answer.")
@@ -991,9 +991,9 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await loop.process_direct("First question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "First question.", "test", "chat-1", "session-1")
         await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
-        await loop.process_direct("Second question.", "test", "chat-2", "session-2")
+        await _dispatch(loop, "Second question.", "test", "chat-2", "session-2")
         await asyncio.sleep(0)
 
         self.assertEqual(provider.maximum_concurrent_memory_calls, 1)
@@ -1027,7 +1027,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             memory_consolidator=MemoryConsolidator(provider, store),
         )
 
-        await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
         await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
         await loop.close()
 
@@ -1094,21 +1094,23 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await loop.process_direct(
+        await _dispatch(
+            loop,
             "Ephemeral question.",
             "test",
             "chat-1",
             "session-1",
             {"ephemeral": True},
         )
-        await loop.process_direct(
+        await _dispatch(
+            loop,
             "System question.",
             "test",
             "chat-2",
             "session-2",
             {"message_type": "system"},
         )
-        await loop.process_direct("/help", "test", "chat-3", "session-3")
+        await _dispatch(loop, "/help", "test", "chat-3", "session-3")
         await asyncio.sleep(0)
 
         self.assertEqual(provider.memory_requests, [])
@@ -1128,10 +1130,9 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        result = await loop.process_direct("Current question.", "test", "chat-1", "session-1")
+        result = await _dispatch(loop, "Current question.", "test", "chat-1", "session-1")
 
-        self.assertEqual(result.stop_reason, "context_window_exceeded")
-        self.assertIn("请新开会话", result.content or "")
+        self.assertIn("请新开会话", result.content)
         self.assertEqual(provider.complete_calls, [])
         self.assertEqual(self._sessions.get_or_create("session-1").messages, ())
 
@@ -1147,6 +1148,32 @@ def _context_builder(workspace: str, history_budget: int = 64_000) -> ContextBui
         context_window_tokens=estimate_messages_tokens((system_message,)) + history_budget + 128,
         output_token_reserve=0,
     )
+
+
+async def _dispatch(
+    loop: AgentLoop,
+    content: str,
+    channel: str,
+    chat_id: str,
+    session_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> OutboundMessage:
+    """Exercise AgentLoop dispatch without restoring a public direct-call API."""
+
+    inbound = InboundMessage(
+        channel=channel,
+        chat_id=chat_id,
+        sender_id="test-sender",
+        session_id=session_id,
+        content=content,
+        metadata=metadata or {},
+    )
+    invocation = loop._command_router.parse(content)
+    if loop._command_router.is_stop_command(invocation):
+        if invocation is None:
+            raise AssertionError("/stop must parse as a command")
+        return await loop._run_stop_command(inbound, invocation)
+    return await loop._dispatch_non_stop_message(inbound, invocation)
 
 
 def _is_summary_request(messages: tuple[BaseMessage, ...]) -> bool:

@@ -1,5 +1,14 @@
 # 项目开发进度
 
+## 最新命令路由、总线调度与手动摘要压缩（2026-09-01）
+
+- [x] 新增 `CommandRouter`、`CommandInvocation` 和 `CommandContext`；命令判断及会话控制位于 Agent 核心层，不进入 Channel、Provider 或 AgentRunner。已实现 `/new`、`/stop`、`/help`、`/compact` 与 `/memory`，未知或参数错误的 slash command 直接返回帮助提示，不进入 LLM、Session 历史或长期记忆事件队列。
+- [x] `Session.reset()` 保持 session key 不变，同时清空短期消息、summary 与 summary boundary，供 `/new` 显式持久化使用；不会删除 workspace 的 `MEMORY.md`。
+- [x] `AgentLoop` 仅以 `MessageBus` 为公开消息入口：`/stop` 优先处理，不等待当前 session lock；其他命令与普通用户消息由统一的异步队列处理。普通 turn 与命令最终都产生带完整路由 metadata 的 `OutboundMessage`；已删除 `process_direct()` 这套第二入口。
+- [x] 将 workspace 级长期记忆事件消费提取为 `MemoryEventConsumer`，负责单一后台消费者的唤醒、顺序处理、失败保留 cursor 和关闭清理；`AgentLoop` 仅在成功持久化本轮消息后追加事件并唤醒消费者。
+- [x] 区分自动与手动摘要压缩：后台自动压缩仍在未摘要原始历史达到 `compaction_threshold_tokens` 时触发；`/compact` 在原始历史超过 `compaction_recent_tokens` 时即可触发。两者均只摘要完整旧轮次，并保留最近约 `compaction_recent_tokens` 的原始历史，不会拆开 tool call/tool result。
+- [x] 最新全量离线测试：`247 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
 ## 最新长期记忆、Session 摘要与上下文窗口（2026-08-31）
 
 - [x] 将 `ContextBuilder` 和日志初始化模块归入 `nanobot/agent/`；`Application` 负责基于 workspace、总上下文窗口和输出预留创建 `ContextBuilder`，再显式注入 `AgentLoop`。
@@ -14,7 +23,7 @@
 - [x] 会话摘要会追加到同一条 system prompt 的 `## Conversation Summary` 区段，不会作为普通 assistant 消息保存或展示给用户。system prompt 每轮动态重建，不保存进 JSONL Session。
 - [x] 后台摘要任务按 session 串行化并由 `AgentLoop` 跟踪；`Application` 关闭时会取消并等待这些任务，压缩失败不会影响当前回复或破坏已有会话。
 - [x] QQ Channel 的 C2C 和群聊回复改用 QQ 原生 Markdown 消息格式；qq-botpy 的默认文件日志已关闭，避免继续生成 `botpy.log`。
-- [x] 最近全量离线测试：`230 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+- [x] 最近全量离线测试：`247 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
 
 本阶段仍不实现真实 tokenizer、provider 原生压缩、多级摘要、记忆自动重试、Dream、记忆去重/冲突解决、TTL 或后台任务恢复。
 
@@ -100,7 +109,7 @@
 - [x] 设计 `AgentRunSpec` 和 `AgentRunResult`：统一运行输入，并返回完整消息历史、已调用工具、累计 token usage 与停止原因。
 - [x] 实现 `AgentLoop` 与文件持久化 `SessionManager`：读取 workspace 会话历史、持久化系统/用户/assistant/tool 消息并在 Agent 重启后恢复。
 - [x] 实现基于 `asyncio.Queue` 的内存 `MessageBus`：支持带 channel、chat ID、session ID 的入站/出站消息发布和消费。
-- [x] 将 `AgentLoop.run()` 接入 `MessageBus`：持续消费入站消息、最多等待一秒后继续轮询，并将最终回答发布为出站消息；`process_direct()` 保留单条显式路由消息的直接处理入口。
+- [x] 将 `AgentLoop.run()` 接入 `MessageBus`：持续消费入站消息、最多等待一秒后继续轮询，并将最终回答发布为出站消息；不再保留第二套直接调用入口。
 - [x] 实现最小 `BaseChannel`、`FakeChannel` 与 `ChannelManager`：Channel 负责外部消息和 `MessageBus` 的转换，Manager 统一管理生命周期并将出站消息路由到目标 Channel。
 - [x] 实现 QQ 文本 Channel：基于可选依赖 `qq-botpy` 支持 C2C 与群聊 @ 消息，保留 QQ 路由字段和原始 `message_id`，并按聊天类型发送文本回复；SDK 缺失时仅在启动时给出明确错误。
 - [x] 增加 `QQChannelConfig`：提供 QQ App ID、Secret 和 `allow_from` 用户 OpenID 白名单配置。
@@ -115,7 +124,7 @@
 最近一次记录的离线测试结果：
 
 ```text
-Ran 175 tests in 5.197s
+Ran 247 tests
 OK (skipped=7)
 ```
 
@@ -176,7 +185,7 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 当前 `AgentRunner` 已通过 `AgentRunSpec` 接收 Provider、消息、`ToolRegistry` 和最大迭代数，并在每轮模型工具调用后按顺序执行工具、追加 assistant/tool 消息；`AgentRunResult` 返回最终文本、完整消息历史、已尝试调用的工具、累计 usage 与停止原因。`AgentLoop` 使用 workspace 下 JSONL `SessionManager` 恢复和保存完整历史：非空 `session_id` 优先作为会话键，否则使用 `channel:chat_id`；Session 只持久化 user、assistant、tool call 与 tool result 消息。system prompt 在每轮请求时由 `ContextBuilder` 重建，包含会话摘要和 `<workspace>/memory/MEMORY.md` 的长期记忆；成功保存本轮完整消息后，后台 `SessionCompactor` 与 `MemoryConsolidator` 可分别更新摘要和 workspace 级长期记忆。
 
-当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID 和内容；`AgentLoop.run()` 仅消费总线消息并发布结果，`process_direct()` 则处理一条显式传入的路由消息。总线为空时，Loop 每次最多等待一秒后继续轮询；取消 Loop 不会留下它创建的后台任务。
+当前 `MessageBus` 由独立的入站和出站 `asyncio.Queue` 组成。`InboundMessage` 和 `OutboundMessage` 都保留 channel、chat ID、session ID、内容与 metadata；`AgentLoop.run()` 是唯一的公开消息处理入口。`/stop` 直接取消当前 session 的活动 turn，其他命令和普通消息在各自 session lock 下处理；总线为空时，Loop 每次最多等待一秒后继续轮询，关闭时会取消并等待其创建的后台任务。
 
 仍未实现：
 

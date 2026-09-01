@@ -64,6 +64,25 @@ class SessionCompactorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(compacted, session)
         self.assertEqual(provider.complete_calls, [])
 
+    async def test_manual_compaction_uses_the_recent_budget_as_its_trigger(self) -> None:
+        old_turn, recent_turn = _turns()
+        session = Session.create("session-1").with_messages((*old_turn, *recent_turn))
+        provider = SummaryProvider(LLMResponse(content="The weather request was completed."))
+        compactor = SessionCompactor(
+            provider,
+            token_threshold=estimate_messages_tokens(session.messages) + 1,
+            recent_token_budget=estimate_messages_tokens(recent_turn),
+        )
+
+        automatic = await compactor.compact(session)
+        manual = await compactor.compact_manually(session)
+
+        self.assertIs(automatic, session)
+        self.assertEqual(manual.summary, "The weather request was completed.")
+        self.assertEqual(manual.summary_until, len(old_turn))
+        self.assertEqual(manual.messages[manual.summary_until :], recent_turn)
+        self.assertEqual(len(provider.complete_calls), 1)
+
     async def test_generates_summary_without_removing_complete_tool_turns(self) -> None:
         old_turn, recent_turn = _turns()
         session = Session.create("session-1").with_messages((*old_turn, *recent_turn))

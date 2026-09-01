@@ -54,16 +54,33 @@ class SessionCompactor:
 
         if not isinstance(session, Session):
             raise TypeError("SessionCompactor requires a Session")
-        return (
-            estimate_messages_tokens(session.messages[session.summary_until :])
-            >= self._token_threshold
-        )
+        return self._raw_message_tokens(session) >= self._token_threshold
+
+    def should_compact_manually(self, session: Session) -> bool:
+        """Return whether a manual request has more history than the retained budget."""
+
+        if not isinstance(session, Session):
+            raise TypeError("SessionCompactor requires a Session")
+        return self._raw_message_tokens(session) > self._recent_token_budget
 
     async def compact(self, session: Session) -> Session:
         """Return a session with an updated summary when a complete prefix can be compacted."""
 
         if not self.should_compact(session):
             return session
+
+        return await self._compact_selected_messages(session)
+
+    async def compact_manually(self, session: Session) -> Session:
+        """Compact on demand once raw history exceeds the retained recent-message budget."""
+
+        if not self.should_compact_manually(session):
+            return session
+
+        return await self._compact_selected_messages(session)
+
+    async def _compact_selected_messages(self, session: Session) -> Session:
+        """Summarize the complete prefix while preserving the configured recent budget."""
 
         messages_to_summarize, summary_until = self._select_messages(session)
         if not messages_to_summarize:
@@ -92,6 +109,10 @@ class SessionCompactor:
             logger.warning("Session compaction returned no usable summary")
             return session
         return session.with_summary(summary, summary_until)
+
+    @staticmethod
+    def _raw_message_tokens(session: Session) -> int:
+        return estimate_messages_tokens(session.messages[session.summary_until :])
 
     def _select_messages(self, session: Session) -> tuple[tuple[BaseMessage, ...], int]:
         raw_messages = session.messages[session.summary_until :]
