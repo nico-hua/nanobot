@@ -12,6 +12,7 @@
 - QQ 文本 Channel、ChannelManager、Application 生命周期与 `python -m nanobot` CLI 入口。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。
 - 长期记忆：`MEMORY.md` 读取、LLM 整理，以及由 `history.jsonl` 和 `.memory_cursor` 驱动的可恢复后台事件队列。
+- workspace Skills：静态 Skill 发现、always-active 指令、`$skill-name` 当前请求激活和环境依赖可用性检查。
 
 ## 结构概览
 
@@ -33,6 +34,23 @@ Channel -> MessageBus -> AgentLoop -> AgentRunner -> LLMProvider
 - workspace 是 Agent 可操作与存储运行时数据的范围。Session、长期记忆和记忆事件默认写入 workspace，项目的 `/.nanobot/workspace/` 已被 Git 忽略。
 
 不要把 API key、QQ secret、Session 内容或 workspace 运行时数据提交到仓库。
+
+## Skills
+
+Skill 位于 `<workspace>/skills/<skill_name>/SKILL.md`。普通 Skill 只作为可用能力摘要提供；用户可在当前消息中使用 `$skill-name` 注入其正文。标记为 `always: true` 的可用 Skill 会在每轮请求中自动注入。
+
+依赖统一声明在 `nanobot.requires` 命名空间：
+
+```yaml
+name: github
+description: Interact with GitHub through gh.
+nanobot:
+  requires:
+    bins: ["gh"]
+    env: ["GITHUB_TOKEN"]
+```
+
+每次请求都会使用当前 `PATH` 和进程环境检查这些依赖。缺少依赖的 Skill 不会被自动或显式注入；Skill 文件中的命令、脚本和安装建议不会被执行。
 
 ## 运行
 
@@ -67,5 +85,6 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 - 多进程/分布式锁、记忆事件归档与可靠任务恢复。
 - 除 QQ 外的真实 Channel、消息可靠投递与总线持久化。
 - 完整 JSON Schema 校验、工具插件生态及更复杂的安全沙箱。
+- Skill 的自动选择、安装/更新、脚本执行、权限控制与插件来源。
 
 详细开发进度和已知限制见 [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)，协作与开发规范见 [AGENTS.md](AGENTS.md)。

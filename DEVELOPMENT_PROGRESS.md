@@ -1,5 +1,14 @@
 # 项目开发进度
 
+## 最新 Skills 加载、显式激活与依赖检查（2026-09-01）
+
+- [x] 新增仅面向 `<workspace>/skills/<skill_name>/SKILL.md` 的 `SkillsLoader`：稳定扫描并读取静态 Markdown Skill，支持 `name`、`description`、`always` frontmatter；文件缺失、不可读或 frontmatter 格式错误时跳过对应 Skill，不会影响其他 Skill 或 Agent 请求。
+- [x] `ContextBuilder` 每轮重新加载 Skill。`always: true` 的可用 Skill 正文进入 `## Always-active Skills`；普通可用 Skill 仅以名称、描述和路径出现在 `## Available Skills`，不会一次性注入全部正文。
+- [x] 用户可在当前消息中以 `$skill-name` 显式激活 Skill。已知且可用的 Skill 按出现顺序去重后以 `[Active Skills for this turn]` 区块注入本轮 system prompt；原始用户消息和 Session 历史不包含注入后的正文。未知或非法引用不会读取任意路径。
+- [x] Skill 可用性统一从 `nanobot.requires.bins` 与 `nanobot.requires.env` 读取；支持嵌套 YAML、`metadata` 内联 JSON 与 JSON frontmatter 表达。每次扫描使用 `PATH` 和当前进程环境重新检查；不可用 Skill 会标记缺失依赖、不会作为 always/显式 Skill 注入，其缺失原因会作为本轮上下文提示提供给模型。旧的顶层 `requires.*` 等格式已忽略。
+- [x] Skill 系统只读取静态文件：不会执行其中命令或脚本，也不会安装 `metadata.nanobot.install` 中声明的依赖。暂未实现按意图选 Skill、Skill 安装/更新、脚本执行、权限控制、缓存、插件与 Skill 依赖关系。
+- [x] 最新全量离线测试：`281 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
 ## 最新命令路由、总线调度与手动摘要压缩（2026-09-01）
 
 - [x] 新增 `CommandRouter`、`CommandInvocation` 和 `CommandContext`；命令判断及会话控制位于 Agent 核心层，不进入 Channel、Provider 或 AgentRunner。已实现 `/new`、`/stop`、`/help`、`/compact` 与 `/memory`，未知或参数错误的 slash command 直接返回帮助提示，不进入 LLM、Session 历史或长期记忆事件队列。

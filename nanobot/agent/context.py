@@ -14,6 +14,7 @@ from ..session.tokens import (
     estimate_messages_tokens,
     split_user_turns,
 )
+from ..skills import SkillLoadError, SkillNotFoundError, SkillsLoader
 from ..tools import Tool
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class ContextWindowExceededError(RuntimeError):
 
 
 class ContextBuilder:
-    """Build a fresh system prompt using optional workspace Markdown files."""
+    """Build a fresh system prompt using workspace files, memory, and Skills."""
 
     def __init__(
         self,
@@ -50,6 +51,7 @@ class ContextBuilder:
         self._context_window_tokens = context_window_tokens
         self._output_token_reserve = output_token_reserve
         self._memory_store = MemoryStore(self._workspace)
+        self._skills_loader = SkillsLoader(self._workspace)
 
     def build_system_prompt(self) -> str:
         """Return a prompt built from the current workspace file contents."""
@@ -74,6 +76,7 @@ class ContextBuilder:
         memory = self._memory_store.read()
         if memory:
             sections.append(f"## Long-term Memory\n\n{memory}")
+        sections.extend(self._build_skill_sections())
         return "\n\n".join(sections)
 
     def build_request_messages(
@@ -108,6 +111,9 @@ class ContextBuilder:
         system_prompt = self.build_system_prompt()
         if summary is not None:
             system_prompt = f"{system_prompt}\n\n## Conversation Summary\n\n{summary}"
+        active_skills = self._build_active_skill_context(current_message.content)
+        if active_skills is not None:
+            system_prompt = f"{system_prompt}\n\n{active_skills}"
         system_message = SystemMessage(content=system_prompt)
         available_history_budget = self._available_history_budget(
             (system_message, current_message),
@@ -175,6 +181,106 @@ class ContextBuilder:
             logger.warning("Skipping unreadable workspace context file (name=%s)", filename)
             return None
         return content if content.strip() else None
+
+    def _build_skill_sections(self) -> tuple[str, ...]:
+        """Build static Skill context without executing or persisting Skill contents."""
+
+        try:
+            skills = self._skills_loader.list_skills()
+        except Exception:
+            logger.exception("Skipping Skills after discovery failed")
+            return ()
+
+        sections: list[str] = []
+        always_active = []
+        for skill in skills:
+            if not skill.always or not skill.is_available:
+                continue
+            try:
+                content = self._skills_loader.read_skill(skill.name)
+            except (SkillLoadError, SkillNotFoundError):
+                logger.warning("Skipping unavailable always-active Skill (name=%s)", skill.name)
+                continue
+            except Exception:
+                logger.exception("Skipping always-active Skill after loading failed (name=%s)", skill.name)
+                continue
+            if content.strip():
+                always_active.append(f"### {skill.name}\n\n{content}")
+        if always_active:
+            sections.append("## Always-active Skills\n\n" + "\n\n".join(always_active))
+
+        available_skills = [
+            skill for skill in skills if not skill.always and skill.is_available
+        ]
+        if available_skills:
+            entries = [
+                "- "
+                f"**{skill.name}**: {skill.description or 'No description provided.'} "
+                f"(`{skill.path}`)"
+                for skill in available_skills
+            ]
+            sections.append("## Available Skills\n\n" + "\n".join(entries))
+        unavailable_skills = [skill for skill in skills if not skill.is_available]
+        if unavailable_skills:
+            entries = [
+                "- "
+                f"**{skill.name}**: {skill.description or 'No description provided.'} "
+                f"Unavailable; missing {', '.join(f'`{dependency}`' for dependency in skill.missing_dependencies)}. "
+                f"(`{skill.path}`)"
+                for skill in unavailable_skills
+            ]
+            sections.append("## Unavailable Skills\n\n" + "\n".join(entries))
+        return tuple(sections)
+
+    def _build_active_skill_context(self, content: str) -> str | None:
+        """Load explicitly referenced non-always Skills for this request only."""
+
+        try:
+            referenced_skills = self._skills_loader.find_referenced_skills(content)
+        except Exception:
+            logger.exception("Skipping explicit Skills after reference discovery failed")
+            return None
+
+        active_skills = []
+        unavailable_skills = []
+        for skill in referenced_skills:
+            if not skill.is_available:
+                unavailable_skills.append(
+                    f"- **{skill.name}** is unavailable: missing "
+                    + ", ".join(
+                        f"`{dependency}`" for dependency in skill.missing_dependencies
+                    )
+                    + "."
+                )
+                continue
+            if skill.always:
+                continue
+            try:
+                skill_content = self._skills_loader.read_skill(skill.name)
+            except (SkillLoadError, SkillNotFoundError):
+                logger.warning("Skipping unavailable explicit Skill (name=%s)", skill.name)
+                continue
+            except Exception:
+                logger.exception("Skipping explicit Skill after loading failed (name=%s)", skill.name)
+                continue
+            if skill_content.strip():
+                active_skills.append(f"### {skill.name}\n\n{skill_content}")
+        sections: list[str] = []
+        if active_skills:
+            sections.append(
+                "[Active Skills for this turn]\n\n"
+                + "\n\n".join(active_skills)
+                + "\n\n[/Active Skills]"
+            )
+        if unavailable_skills:
+            sections.append(
+                "[Unavailable Skills requested for this turn]\n\n"
+                + "\n".join(unavailable_skills)
+                + "\n\n[/Unavailable Skills]"
+            )
+        if not sections:
+            return None
+        return "\n\n".join(sections)
 
 
 def estimate_tools_tokens(tools: Sequence[Tool]) -> int:

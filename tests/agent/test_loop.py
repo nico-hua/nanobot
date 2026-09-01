@@ -8,6 +8,7 @@ import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from nanobot.agent import (
     AgentLoop,
@@ -245,6 +246,68 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
                 AIMessage(content="First answer."),
                 HumanMessage(content="Second question."),
                 AIMessage(content="Second answer."),
+            ),
+        )
+
+    async def test_persists_the_raw_user_message_when_a_skill_is_explicitly_active(self) -> None:
+        skill_path = Path(self._temporary_directory.name) / "skills" / "github" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text(
+            "---\nname: github\n---\nGitHub turn instructions.\n",
+            encoding="utf-8",
+        )
+        provider = ScriptedProvider((LLMResponse(content="Skill answer."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+        )
+
+        await _dispatch(loop, "Please use $github.", "test", "chat-1", "session-1")
+
+        self.assertIn("GitHub turn instructions.", provider.complete_calls[0][0].content)
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                HumanMessage(content="Please use $github."),
+                AIMessage(content="Skill answer."),
+            ),
+        )
+
+    @patch("nanobot.skills.loader.shutil.which", return_value=None)
+    async def test_unavailable_skill_context_is_not_saved_in_session_messages(
+        self,
+        which: object,
+    ) -> None:
+        skill_path = Path(self._temporary_directory.name) / "skills" / "github" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text(
+            "---\nname: github\nnanobot:\n  requires:\n    bins: [\"gh\"]\n---\nGitHub turn instructions.\n",
+            encoding="utf-8",
+        )
+        provider = ScriptedProvider((LLMResponse(content="Install gh first."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+        )
+
+        await _dispatch(loop, "Please use $github.", "test", "chat-1", "session-1")
+
+        self.assertIn(
+            "[Unavailable Skills requested for this turn]",
+            provider.complete_calls[0][0].content,
+        )
+        self.assertNotIn("GitHub turn instructions.", provider.complete_calls[0][0].content)
+        self.assertEqual(
+            self._sessions.get_or_create("session-1").messages,
+            (
+                HumanMessage(content="Please use $github."),
+                AIMessage(content="Install gh first."),
             ),
         )
 

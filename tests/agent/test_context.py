@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from nanobot.agent import (
     ContextBuilder,
@@ -123,6 +124,240 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIn("First memory.", first_prompt)
         self.assertIn("Second memory.", second_prompt)
         self.assertNotIn("First memory.", second_prompt)
+
+    def test_includes_always_skill_bodies_and_available_skill_summaries(self) -> None:
+        always_path = self._write_skill(
+            "always",
+            "---\nname: always-skill\ndescription: Always available.\nalways: true\n---\nAlways body instruction.\n",
+        )
+        available_path = self._write_skill(
+            "available",
+            "---\nname: available-skill\ndescription: Available on demand.\n---\nDo not inject this full body.\n",
+        )
+
+        prompt = ContextBuilder(self._workspace).build_system_prompt()
+
+        self.assertIn("## Always-active Skills", prompt)
+        self.assertIn("### always-skill\n\nAlways body instruction.", prompt)
+        self.assertIn("## Available Skills", prompt)
+        self.assertIn("**available-skill**: Available on demand.", prompt)
+        self.assertIn(f"`{available_path}`", prompt)
+        self.assertNotIn("Do not inject this full body.", prompt)
+        self.assertNotIn(f"`{always_path}`", prompt)
+
+    def test_skips_empty_skill_sections_when_no_skills_are_available(self) -> None:
+        prompt = ContextBuilder(self._workspace).build_system_prompt()
+
+        self.assertNotIn("## Always-active Skills", prompt)
+        self.assertNotIn("## Available Skills", prompt)
+
+    def test_reloads_always_skill_content_for_each_system_prompt(self) -> None:
+        path = self._write_skill(
+            "always",
+            "---\nname: always\nalways: true\n---\nFirst instruction.\n",
+        )
+        builder = ContextBuilder(self._workspace)
+
+        first_prompt = builder.build_system_prompt()
+        path.write_text(
+            "---\nname: always\nalways: true\n---\nSecond instruction.\n",
+            encoding="utf-8",
+        )
+        second_prompt = builder.build_system_prompt()
+
+        self.assertIn("First instruction.", first_prompt)
+        self.assertIn("Second instruction.", second_prompt)
+        self.assertNotIn("First instruction.", second_prompt)
+
+    def test_skill_content_is_not_saved_in_session_messages(self) -> None:
+        self._write_skill(
+            "always",
+            "---\nname: always\nmetadata:\n  nanobot:\n    always: true\n---\nPersistent Skill instruction.\n",
+        )
+        session = Session.create("skill-test").with_messages(
+            (HumanMessage(content="Previous question."),)
+        )
+        original_messages = session.messages
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            session.messages,
+            HumanMessage(content="Current question."),
+        )
+
+        self.assertEqual(session.messages, original_messages)
+        self.assertIn("Persistent Skill instruction.", messages[0].content)
+        self.assertFalse(
+            any("Persistent Skill instruction." in message.content for message in session.messages)
+        )
+
+    def test_skill_contents_are_never_executed(self) -> None:
+        self._write_skill(
+            "static",
+            "---\nname: static\nalways: true\n---\npython -c \\\"raise RuntimeError('must not run')\\\"\n",
+        )
+
+        prompt = ContextBuilder(self._workspace).build_system_prompt()
+
+        self.assertIn("raise RuntimeError('must not run')", prompt)
+
+    def test_lists_skills_in_a_stable_order_and_skips_unreadable_skill_files(self) -> None:
+        self._write_skill(
+            "zeta-always",
+            "---\nname: zeta-always\nalways: true\n---\nZeta instruction.\n",
+        )
+        self._write_skill(
+            "alpha-always",
+            "---\nname: alpha-always\nalways: true\n---\nAlpha instruction.\n",
+        )
+        self._write_skill(
+            "zeta-available",
+            "---\nname: zeta-available\ndescription: Zeta available.\n---\nZeta body.\n",
+        )
+        self._write_skill(
+            "alpha-available",
+            "---\nname: alpha-available\ndescription: Alpha available.\n---\nAlpha body.\n",
+        )
+        broken_path = self._workspace / "skills" / "broken" / "SKILL.md"
+        broken_path.parent.mkdir(parents=True)
+        broken_path.write_bytes(b"\xff")
+
+        prompt = ContextBuilder(self._workspace).build_system_prompt()
+
+        self.assertLess(prompt.index("### alpha-always"), prompt.index("### zeta-always"))
+        self.assertLess(prompt.index("**alpha-available**"), prompt.index("**zeta-available**"))
+        self.assertNotIn("broken", prompt)
+
+    def test_explicit_references_load_non_always_skills_in_message_order_once(self) -> None:
+        self._write_skill(
+            "github",
+            "---\nname: github\ndescription: GitHub help.\n---\nGitHub full instructions.\n",
+        )
+        self._write_skill(
+            "weather",
+            "---\nname: weather\ndescription: Weather help.\n---\nWeather full instructions.\n",
+        )
+        outside_path = self._workspace / "outside" / "SKILL.md"
+        outside_path.parent.mkdir(parents=True, exist_ok=True)
+        outside_path.write_text("Outside instructions.", encoding="utf-8")
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            (),
+            HumanMessage(
+                content="Use $weather, then $github, then $weather again; ignore $unknown and $../outside."
+            ),
+        )
+
+        prompt = messages[0].content
+        self.assertIn("[Active Skills for this turn]", prompt)
+        self.assertIn("[/Active Skills]", prompt)
+        self.assertLess(
+            prompt.index("Weather full instructions."),
+            prompt.index("GitHub full instructions."),
+        )
+        self.assertEqual(prompt.count("Weather full instructions."), 1)
+        self.assertNotIn("Outside instructions.", prompt)
+        self.assertEqual(messages[-1].content, "Use $weather, then $github, then $weather again; ignore $unknown and $../outside.")
+
+    def test_explicit_reference_does_not_repeat_an_always_active_skill(self) -> None:
+        self._write_skill(
+            "always",
+            "---\nname: always\nalways: true\n---\nAlways Skill instruction.\n",
+        )
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            (),
+            HumanMessage(content="Please use $always for this request."),
+        )
+
+        prompt = messages[0].content
+        self.assertIn("## Always-active Skills", prompt)
+        self.assertEqual(prompt.count("Always Skill instruction."), 1)
+        self.assertNotIn("[Active Skills for this turn]", prompt)
+
+    @patch("nanobot.skills.loader.shutil.which", return_value=None)
+    def test_marks_unavailable_skills_and_does_not_activate_them(self, which: object) -> None:
+        self._write_skill(
+            "github",
+            "---\nname: github\ndescription: GitHub help.\nnanobot:\n  requires:\n    bins: [\"gh\"]\n---\nGitHub full instructions.\n",
+        )
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            (),
+            HumanMessage(content="Use $github."),
+        )
+
+        prompt = messages[0].content
+        self.assertIn("## Unavailable Skills", prompt)
+        self.assertIn("**github**", prompt)
+        self.assertIn("`bin: gh`", prompt)
+        self.assertNotIn("## Available Skills", prompt)
+        self.assertNotIn("GitHub full instructions.", prompt)
+        self.assertNotIn("[Active Skills for this turn]", prompt)
+        self.assertIn("[Unavailable Skills requested for this turn]", prompt)
+        self.assertIn("**github** is unavailable: missing `bin: gh`.", prompt)
+
+    def test_explicit_skill_context_only_affects_its_current_request(self) -> None:
+        self._write_skill(
+            "github",
+            "---\nname: github\n---\nGitHub request-only instructions.\n",
+        )
+        builder = ContextBuilder(self._workspace)
+        session = Session.create("skill-request").with_messages(
+            (HumanMessage(content="Previous question."),)
+        )
+        original_messages = session.messages
+
+        active_request = builder.build_request_messages(
+            session.messages,
+            HumanMessage(content="Use $github."),
+        )
+        normal_request = builder.build_request_messages(
+            session.messages,
+            HumanMessage(content="Use normal behavior."),
+        )
+
+        self.assertIn("GitHub request-only instructions.", active_request[0].content)
+        self.assertNotIn("GitHub request-only instructions.", normal_request[0].content)
+        self.assertEqual(session.messages, original_messages)
+        self.assertEqual(active_request[-1], HumanMessage(content="Use $github."))
+
+    def test_unknown_or_invalid_skill_references_leave_request_behavior_unchanged(self) -> None:
+        current_message = HumanMessage(content="Use $unknown and $../outside.")
+
+        messages = ContextBuilder(self._workspace).build_request_messages((), current_message)
+
+        self.assertNotIn("[Active Skills for this turn]", messages[0].content)
+        self.assertEqual(messages[-1], current_message)
+
+    def test_explicit_skill_contents_are_never_executed(self) -> None:
+        self._write_skill(
+            "static",
+            "---\nname: static\n---\npython -c \\\"raise RuntimeError('must not run')\\\"\n",
+        )
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            (),
+            HumanMessage(content="Use $static."),
+        )
+
+        self.assertIn("raise RuntimeError('must not run')", messages[0].content)
+
+    def test_explicit_skill_loading_failure_does_not_break_request_construction(self) -> None:
+        broken_path = self._workspace / "skills" / "broken" / "SKILL.md"
+        broken_path.parent.mkdir(parents=True)
+        broken_path.write_bytes(b"\xff")
+        self._write_skill(
+            "valid",
+            "---\nname: valid\n---\nValid explicit instructions.\n",
+        )
+
+        messages = ContextBuilder(self._workspace).build_request_messages(
+            (),
+            HumanMessage(content="Use $valid and $broken."),
+        )
+
+        self.assertIn("Valid explicit instructions.", messages[0].content)
+        self.assertNotIn("broken", messages[0].content)
 
     def test_long_term_memory_does_not_modify_session_messages(self) -> None:
         self._write_memory("Persistent user preference.")
@@ -405,6 +640,12 @@ class ContextBuilderTest(unittest.TestCase):
     def _write_memory(self, content: str) -> Path:
         path = self._workspace / "memory" / "MEMORY.md"
         path.parent.mkdir(exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def _write_skill(self, directory_name: str, content: str) -> Path:
+        path = self._workspace / "skills" / directory_name / "SKILL.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return path
 
