@@ -14,7 +14,7 @@
 - [x] 会话摘要会追加到同一条 system prompt 的 `## Conversation Summary` 区段，不会作为普通 assistant 消息保存或展示给用户。system prompt 每轮动态重建，不保存进 JSONL Session。
 - [x] 后台摘要任务按 session 串行化并由 `AgentLoop` 跟踪；`Application` 关闭时会取消并等待这些任务，压缩失败不会影响当前回复或破坏已有会话。
 - [x] QQ Channel 的 C2C 和群聊回复改用 QQ 原生 Markdown 消息格式；qq-botpy 的默认文件日志已关闭，避免继续生成 `botpy.log`。
-- [x] 最近全量离线测试：`225 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+- [x] 最近全量离线测试：`230 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
 
 本阶段仍不实现真实 tokenizer、provider 原生压缩、多级摘要、记忆自动重试、Dream、记忆去重/冲突解决、TTL 或后台任务恢复。
 
@@ -42,7 +42,7 @@
 - [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`。
 - [x] OpenAI-compatible 与 Anthropic-compatible Provider 支持初始化默认 `max_tokens` / `temperature`，单次调用的显式参数优先。
 
-最后更新：2026-08-31
+最后更新：2026-09-01
 
 ## 项目目标
 
@@ -247,3 +247,12 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 1. 为 `SessionManager` 在实际需要时加入 session 并发访问控制、损坏文件处理与迁移策略。
 2. 扩展 QQ Channel 的错误处理和路由测试，或在相同 `BaseChannel` 边界上接入下一个真实 Channel。
 3. 根据 AgentRunner 的实际需求，再扩展 `ToolContext`、Provider 配置、流式事件和工具 Schema。
+# 最新：持久化长期记忆事件队列（2026-09-01）
+
+- [x] 长期记忆整理改为 workspace 级持久化事件队列：`MemoryStore` 将每轮已完成对话的不可变消息快照追加到 `<workspace>/memory/history.jsonl`。每个事件带有递增事件 ID、session key、创建时间和完整的 user / assistant / tool 消息；system prompt、Session summary 等内部上下文不会写入该队列。
+- [x] 增加 `<workspace>/memory/.memory_cursor`：仅当 `MemoryConsolidator` 成功原子更新 `MEMORY.md` 后，才以临时文件替换方式推进 cursor。整理或写入失败时 cursor 保持不变，后续启动可安全重试未完成事件。
+- [x] `AgentLoop` 在正常用户对话成功、完整 Session 已保存且记忆事件已落盘后，非阻塞地唤醒单一后台消费者；`AgentLoop.run()` 启动时也会处理 cursor 之后的遗留事件，支持进程重启恢复。失败、取消、ephemeral、system、slash command 和记忆整理来源的消息不会产生记忆事件。
+- [x] 后台消费者按 workspace 事件顺序逐条整理，避免同一运行时内并发写入 `MEMORY.md`；`Application`/`AgentLoop` 关闭时统一取消或等待该任务。完整 Session 继续由 `SessionManager` 保存，事件队列不参与普通模型上下文。
+- [x] 补充 focused tests：事件与 cursor 持久化、重启恢复、失败不推进 cursor、多个 Session 的顺序消费、重复事件幂等整理，以及关闭时的后台任务处理。
+
+本阶段仍不实现多进程分布式锁、事件删除/归档、批处理、自动重试、记忆冲突解决和进程重启后的任务调度策略。

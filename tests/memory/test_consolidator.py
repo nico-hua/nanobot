@@ -147,6 +147,22 @@ class MemoryConsolidatorTest(unittest.IsolatedAsyncioTestCase):
             "Stable project convention.",
         )
 
+    async def test_reprocessing_one_event_replaces_instead_of_appending_memory(self) -> None:
+        event = self._store.append_event("session-1", _completed_messages())
+        provider = ConsolidationProvider(
+            (
+                LLMResponse(content="Stable project convention."),
+                LLMResponse(content="Stable project convention."),
+            )
+        )
+        consolidator = MemoryConsolidator(provider, self._store)
+
+        self.assertTrue(await consolidator.consolidate_event(event))
+        self.assertTrue(await consolidator.consolidate_event(event))
+
+        self.assertEqual(self._store.read(), "Stable project convention.")
+        self.assertEqual(self._store.read().count("Stable project convention."), 1)
+
 
 def _completed_messages() -> tuple[BaseMessage, ...]:
     return (

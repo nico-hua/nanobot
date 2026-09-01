@@ -18,6 +18,7 @@ from nanobot.agent import (
     ContextBuilder,
     estimate_messages_tokens,
 )
+from nanobot.bus import MessageBus
 from nanobot.memory import MemoryConsolidator, MemoryStore
 from nanobot.providers import (
     AIMessage,
@@ -845,6 +846,15 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self._sessions.get_or_create("session-1").summary)
 
     async def test_schedules_memory_after_saving_a_complete_snapshot_without_blocking(self) -> None:
+        previous_messages = (
+            HumanMessage(content="Earlier question."),
+            AIMessage(content="Earlier answer."),
+        )
+        self._sessions.save(
+            self._sessions.get_or_create("session-1")
+            .with_messages(previous_messages)
+            .with_summary("Internal session summary.", len(previous_messages))
+        )
         provider = BackgroundMemoryProvider(
             (LLMResponse(content="Current answer."),),
             LLMResponse(content="The user prefers concise answers."),
@@ -857,6 +867,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(provider, store),
         )
 
@@ -869,9 +880,25 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
             (
+                *previous_messages,
                 HumanMessage(content="Current question."),
                 AIMessage(content="Current answer."),
             ),
+        )
+        events = store.read_events_after(0)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].session_key, "session-1")
+        self.assertEqual(
+            events[0].messages,
+            (
+                HumanMessage(content="Current question."),
+                AIMessage(content="Current answer."),
+            ),
+        )
+        self.assertFalse(any(isinstance(message, SystemMessage) for message in events[0].messages))
+        self.assertNotIn(
+            "Internal session summary.",
+            tuple(message.content for message in events[0].messages),
         )
         await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
         self.assertEqual(store.read(), "")
@@ -883,20 +910,23 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         await loop.wait_for_memory_consolidations()
 
         self.assertEqual(store.read(), "The user prefers concise answers.")
+        self.assertEqual(store.read_cursor(), 1)
         self.assertEqual(len(provider.normal_calls), 1)
         self.assertEqual(len(provider.memory_requests), 1)
 
     async def test_runner_failure_does_not_schedule_memory_consolidation(self) -> None:
         provider = BackgroundMemoryProvider((), LLMResponse(content="unused"))
+        store = MemoryStore(self._temporary_directory.name)
         loop = AgentLoop(
             FailingRunner(),
             provider,
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(
                 provider,
-                MemoryStore(self._temporary_directory.name),
+                store,
             ),
         )
 
@@ -905,6 +935,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(provider.memory_requests, [])
+        self.assertEqual(store.read_events_after(0), ())
 
     async def test_memory_failure_does_not_affect_the_saved_user_result(self) -> None:
         provider = BackgroundMemoryProvider(
@@ -918,6 +949,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(provider, store),
         )
 
@@ -926,6 +958,8 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content, "Current answer.")
         self.assertEqual(store.read(), "")
+        self.assertEqual(store.read_cursor(), 0)
+        self.assertEqual(len(store.read_events_after(0)), 1)
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
             (
@@ -943,15 +977,17 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             LLMResponse(content="Stable project convention."),
             block_memory=True,
         )
+        store = MemoryStore(self._temporary_directory.name)
         loop = AgentLoop(
             AgentRunner(),
             provider,
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(
                 provider,
-                MemoryStore(self._temporary_directory.name),
+                store,
             ),
         )
 
@@ -966,6 +1002,11 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(provider.maximum_concurrent_memory_calls, 1)
         self.assertEqual(len(provider.memory_requests), 2)
+        self.assertEqual(
+            tuple(event.session_key for event in store.read_events_after(0)),
+            ("session-1", "session-2"),
+        )
+        self.assertEqual(store.read_cursor(), 2)
         self.assertIn('"content":"First question."', provider.memory_requests[0][1].content)
         self.assertIn('"content":"Second question."', provider.memory_requests[1][1].content)
 
@@ -982,6 +1023,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(provider, store),
         )
 
@@ -991,6 +1033,43 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(provider.memory_finished.is_set())
         self.assertEqual(store.read(), "")
+        self.assertEqual(store.read_cursor(), 0)
+        self.assertEqual(len(store.read_events_after(0)), 1)
+
+    async def test_recreated_loop_resumes_unprocessed_memory_events_on_startup(self) -> None:
+        store = MemoryStore(self._temporary_directory.name)
+        event = store.append_event(
+            "session-1",
+            (
+                HumanMessage(content="Remember this decision."),
+                AIMessage(content="I will preserve it."),
+            ),
+        )
+        provider = BackgroundMemoryProvider(
+            (),
+            LLMResponse(content="A durable project decision."),
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+            message_bus=MessageBus(),
+            memory_store=store,
+            memory_consolidator=MemoryConsolidator(provider, store),
+        )
+        run_task = asyncio.create_task(loop.run())
+
+        await asyncio.wait_for(provider.memory_started.wait(), timeout=1)
+        await loop.wait_for_memory_consolidations()
+
+        self.assertEqual(store.read_cursor(), event.event_id)
+        self.assertEqual(store.read(), "A durable project decision.")
+
+        run_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
 
     async def test_skips_memory_consolidation_for_non_normal_user_messages(self) -> None:
         provider = BackgroundMemoryProvider(
@@ -1001,15 +1080,17 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
             LLMResponse(content="unused"),
         )
+        store = MemoryStore(self._temporary_directory.name)
         loop = AgentLoop(
             AgentRunner(),
             provider,
             ToolRegistry(),
             self._sessions,
             _context_builder(self._temporary_directory.name),
+            memory_store=store,
             memory_consolidator=MemoryConsolidator(
                 provider,
-                MemoryStore(self._temporary_directory.name),
+                store,
             ),
         )
 
@@ -1031,6 +1112,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         self.assertEqual(provider.memory_requests, [])
+        self.assertEqual(store.read_events_after(0), ())
 
     async def test_returns_a_user_facing_message_when_required_context_exceeds_the_window(self) -> None:
         provider = ScriptedProvider(())

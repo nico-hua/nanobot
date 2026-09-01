@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from nanobot.memory import MemoryStore
+from nanobot.providers import AIMessage, HumanMessage, SystemMessage
 
 
 class MemoryStoreTest(unittest.TestCase):
@@ -55,3 +56,41 @@ class MemoryStoreTest(unittest.TestCase):
                 store.write("Replacement memory.")
 
         self.assertEqual(store.read(), "Existing memory.")
+
+    def test_appends_events_and_reads_only_events_after_cursor(self) -> None:
+        store = MemoryStore(self._workspace)
+        first_event = store.append_event(
+            "session-1",
+            (HumanMessage(content="First question."), AIMessage(content="First answer.")),
+        )
+        recreated_store = MemoryStore(self._workspace)
+        second_event = recreated_store.append_event(
+            "session-2",
+            (HumanMessage(content="Second question."), AIMessage(content="Second answer.")),
+        )
+
+        self.assertEqual(first_event.event_id, 1)
+        self.assertEqual(second_event.event_id, 2)
+        self.assertEqual(
+            recreated_store.read_events_after(0),
+            (first_event, second_event),
+        )
+        self.assertEqual(recreated_store.read_events_after(1), (second_event,))
+
+    def test_cursor_is_atomic_and_persists_for_a_recreated_store(self) -> None:
+        store = MemoryStore(self._workspace)
+        store.update_cursor(4)
+
+        self.assertEqual(MemoryStore(self._workspace).read_cursor(), 4)
+
+        with patch.object(Path, "replace", side_effect=OSError("replace failed")):
+            with self.assertRaises(OSError):
+                store.update_cursor(5)
+
+        self.assertEqual(MemoryStore(self._workspace).read_cursor(), 4)
+
+    def test_rejects_system_messages_from_memory_events(self) -> None:
+        store = MemoryStore(self._workspace)
+
+        with self.assertRaisesRegex(ValueError, "system messages"):
+            store.append_event("session-1", (SystemMessage(content="Internal prompt."),))

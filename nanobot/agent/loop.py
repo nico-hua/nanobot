@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..bus import MessageBus, OutboundMessage
-from ..memory import MemoryConsolidator
+from ..memory import MemoryConsolidator, MemoryStore
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
 from ..session import SessionCompactor, SessionManager
 from ..tools import ToolRegistry
@@ -35,6 +35,7 @@ class AgentLoop:
         context_builder: ContextBuilder,
         message_bus: MessageBus | None = None,
         session_compactor: SessionCompactor | None = None,
+        memory_store: MemoryStore | None = None,
         memory_consolidator: MemoryConsolidator | None = None,
     ) -> None:
         if not isinstance(runner, AgentRunner):
@@ -59,6 +60,12 @@ class AgentLoop:
             MemoryConsolidator,
         ):
             raise TypeError("AgentLoop memory_consolidator must be a MemoryConsolidator")
+        if memory_store is not None and not isinstance(memory_store, MemoryStore):
+            raise TypeError("AgentLoop memory_store must be a MemoryStore")
+        if (memory_store is None) != (memory_consolidator is None):
+            raise ValueError(
+                "AgentLoop memory_store and memory_consolidator must be configured together"
+            )
 
         self._runner = runner
         self._provider = provider
@@ -67,10 +74,12 @@ class AgentLoop:
         self._context_builder = context_builder
         self._message_bus = message_bus
         self._session_compactor = session_compactor
+        self._memory_store = memory_store
         self._memory_consolidator = memory_consolidator
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._compaction_tasks: set[asyncio.Task[None]] = set()
-        self._memory_consolidation_tasks: set[asyncio.Task[None]] = set()
+        self._memory_processing_task: asyncio.Task[None] | None = None
+        self._memory_wake_requested = False
         self._closed = False
 
     async def run(self) -> None:
@@ -80,6 +89,7 @@ class AgentLoop:
             raise RuntimeError("AgentLoop requires a MessageBus for continuous running")
 
         logger.info("Agent loop started")
+        self._wake_memory_processor()
         try:
             while True:
                 try:
@@ -122,7 +132,10 @@ class AgentLoop:
         if self._closed:
             return
         self._closed = True
-        tasks = tuple(self._compaction_tasks | self._memory_consolidation_tasks)
+        tasks = set(self._compaction_tasks)
+        if self._memory_processing_task is not None:
+            tasks.add(self._memory_processing_task)
+        self._memory_wake_requested = False
         for task in tasks:
             task.cancel()
         if tasks:
@@ -139,14 +152,13 @@ class AgentLoop:
             )
 
     async def wait_for_memory_consolidations(self) -> None:
-        """Wait until currently scheduled memory consolidations have completed."""
+        """Wait until the currently scheduled memory event consumer finishes."""
 
-        while self._memory_consolidation_tasks:
-            tasks = tuple(self._memory_consolidation_tasks)
-            await asyncio.gather(*tasks, return_exceptions=True)
-            self._memory_consolidation_tasks.difference_update(
-                task for task in tasks if task.done()
-            )
+        while self._memory_processing_task is not None:
+            task = self._memory_processing_task
+            await asyncio.gather(task, return_exceptions=True)
+            if self._memory_processing_task is task:
+                self._on_memory_processor_done(task)
 
     async def process_direct(
         self,
@@ -218,7 +230,7 @@ class AgentLoop:
             self._session_manager.save(completed_session)
             memory_snapshot = (current_message, *completed_messages)
             if consolidate_memory:
-                self._schedule_memory_consolidation(memory_snapshot)
+                self._append_memory_event(session_key, memory_snapshot)
             self._schedule_compaction(session_key)
             return result
 
@@ -241,23 +253,66 @@ class AgentLoop:
         except Exception:
             logger.exception("Background session compaction failed")
 
-    def _schedule_memory_consolidation(
+    def _append_memory_event(
         self,
+        session_key: str,
         messages: tuple[BaseMessage, ...],
     ) -> None:
-        if self._memory_consolidator is None or self._closed:
+        if (
+            self._memory_store is None
+            or self._memory_consolidator is None
+            or self._closed
+        ):
             return
-        task = asyncio.create_task(self._consolidate_memory(messages))
-        self._memory_consolidation_tasks.add(task)
-        task.add_done_callback(self._memory_consolidation_tasks.discard)
-
-    async def _consolidate_memory(self, messages: tuple[BaseMessage, ...]) -> None:
         try:
-            await self._memory_consolidator.consolidate(messages)
+            self._memory_store.append_event(session_key, messages)
+        except Exception:
+            logger.exception("Unable to append a long-term memory event")
+            return
+        self._wake_memory_processor()
+
+    def _wake_memory_processor(self) -> None:
+        if (
+            self._memory_store is None
+            or self._memory_consolidator is None
+            or self._closed
+        ):
+            return
+        self._memory_wake_requested = True
+        task = self._memory_processing_task
+        if task is not None and not task.done():
+            return
+        task = asyncio.create_task(self._process_pending_memory_events())
+        self._memory_processing_task = task
+        task.add_done_callback(self._on_memory_processor_done)
+
+    async def _process_pending_memory_events(self) -> None:
+        try:
+            while True:
+                self._memory_wake_requested = False
+                cursor = self._memory_store.read_cursor()
+                events = self._memory_store.read_events_after(cursor)
+                if not events:
+                    return
+                for event in events:
+                    updated = await self._memory_consolidator.consolidate_event(event)
+                    if not updated:
+                        logger.warning(
+                            "Long-term memory event was not consolidated (event_id=%d)",
+                            event.event_id,
+                        )
+                        return
+                    self._memory_store.update_cursor(event.event_id)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Background long-term memory consolidation failed")
+            logger.exception("Background long-term memory event processing failed")
+
+    def _on_memory_processor_done(self, task: asyncio.Task[None]) -> None:
+        if self._memory_processing_task is task:
+            self._memory_processing_task = None
+        if self._memory_wake_requested and not self._closed:
+            self._wake_memory_processor()
 
     def _lock_for(self, session_key: str) -> asyncio.Lock:
         lock = self._session_locks.get(session_key)

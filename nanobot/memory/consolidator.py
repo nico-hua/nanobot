@@ -16,6 +16,7 @@ from ..providers import (
     SystemMessage,
     ToolMessage,
 )
+from .models import MemoryEvent
 from .store import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ Extract only stable, high-value information: enduring user preferences, confirme
 project conventions, important facts, and decisions needed by future tasks. Ignore
 small talk, temporary status, one-off task details, duplicates, and sensitive data.
 Return only the complete replacement MEMORY.md content. If there is no durable
-information to retain, return an empty response. Do not call tools."""
+information to retain, return an empty response. Reprocessing the same conversation
+must not duplicate existing facts. Do not call tools."""
 
 
 class MemoryConsolidator:
@@ -50,6 +52,14 @@ class MemoryConsolidator:
 
         async with self._workspace_lock:
             return await self._consolidate(conversation)
+
+    async def consolidate_event(self, event: MemoryEvent) -> bool:
+        """Consolidate one durable event without appending duplicate memory content."""
+
+        if not isinstance(event, MemoryEvent):
+            raise TypeError("MemoryConsolidator requires a MemoryEvent")
+        async with self._workspace_lock:
+            return await self._consolidate(event.messages)
 
     async def _consolidate(self, messages: tuple[BaseMessage, ...]) -> bool:
         request = HumanMessage(

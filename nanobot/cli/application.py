@@ -30,6 +30,7 @@ AgentLoopFactory = Callable[
         SessionManager,
         ContextBuilder,
         SessionCompactor,
+        MemoryStore,
         MemoryConsolidator,
         MessageBus,
     ],
@@ -96,6 +97,7 @@ class Application:
             self._session_manager,
             self._context_builder,
             self._session_compactor,
+            self._memory_store,
             self._memory_consolidator,
             self._message_bus,
         )
@@ -300,6 +302,7 @@ def _create_agent_loop(
     session_manager: SessionManager,
     context_builder: ContextBuilder,
     session_compactor: SessionCompactor,
+    memory_store: MemoryStore,
     memory_consolidator: MemoryConsolidator,
     message_bus: MessageBus,
 ) -> AgentLoop:
@@ -311,5 +314,6 @@ def _create_agent_loop(
         context_builder,
         message_bus=message_bus,
         session_compactor=session_compactor,
+        memory_store=memory_store,
         memory_consolidator=memory_consolidator,
     )

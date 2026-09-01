@@ -204,10 +204,11 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             session_manager: Any,
             context_builder: ContextBuilder,
             session_compactor: Any,
+            memory_store: Any,
             memory_consolidator: MemoryConsolidator,
             bus: MessageBus,
         ) -> RecordingLoop:
-            del runner, provider, registry, session_manager, session_compactor
+            del runner, provider, registry, session_manager, session_compactor, memory_store
             received_context_builders.append(context_builder)
             received_memory_consolidators.append(memory_consolidator)
             return _configure_loop(loop, bus)
@@ -271,7 +272,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -301,7 +302,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -472,7 +473,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_consolidator, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
     )
     return app, managers[0]
