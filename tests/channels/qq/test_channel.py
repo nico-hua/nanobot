@@ -156,6 +156,11 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
         await channel.start()
         await asyncio.sleep(0)
 
+        # Populate the chat cache first.  The initiated marker must still
+        # prevent a scheduled message from replying with this message ID.
+        await channel.handle_c2c_message(c2c_event())
+        await channel.handle_group_at_message(group_event())
+
         await channel.send(
             OutboundMessage(
                 channel="qq",
@@ -163,7 +168,10 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
                 sender_id="cron",
                 session_id="qq:user-1",
                 content="Scheduled greeting",
-                metadata={"qq_chat_type": "c2c", "source": "cron"},
+                metadata={
+                    "qq_chat_type": "c2c",
+                    "source": "cron",
+                },
             )
         )
         await channel.send(
@@ -173,7 +181,10 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
                 sender_id="cron",
                 session_id="qq:group-1",
                 content="Scheduled group greeting",
-                metadata={"qq_chat_type": "group", "source": "cron"},
+                metadata={
+                    "qq_chat_type": "group",
+                    "source": "cron",
+                },
             )
         )
         await channel.stop()

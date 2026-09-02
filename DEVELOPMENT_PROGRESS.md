@@ -1,5 +1,17 @@
 # 项目开发进度
 
+## 最新 CronTool、请求上下文与记忆队列批处理（2026-09-02）
+
+- [x] 新增 `cron_timezone` 配置（默认 `Asia/Shanghai`），在配置加载阶段校验 IANA 时区，并由 `Application` 通过 `ToolContext` 注入 `CronService` 与时区。
+- [x] `ToolContext` 现在承载工具创建所需的共享运行时依赖；新增任务局部 `RequestContext`（`ContextVar`），由 `AgentLoop` 在调用 `AgentRunner` 前根据当前 `InboundMessage` 绑定 session / channel / chat / sender 与 metadata。工具可读取这些可信路由信息，模型参数不能覆盖它们。
+- [x] 新增内置 `CronTool`：支持 `add`、`list`、`remove`。创建任务时绑定当前会话路由，`list` / `remove` 仅操作当前 session 的任务；`at` 使用 ISO-8601 时间，未含时区时按 `cron_timezone` 解析，`every_seconds` 必须为正数。
+- [x] Cron 触发的消息保留 `source=cron`。QQ Channel 将其视为主动消息，不再回退复用会话缓存的 `message_id`，避免重复使用默认 `msg_seq=1` 被 QQ API 去重；普通用户消息的被动回复保持原有行为。
+- [x] 长期记忆整理结果区分 `UPDATED`、`SKIPPED` 与 `FAILED`：模型成功但返回空内容表示无记忆可写，事件 cursor 仍会推进；Provider、写入或无效结果失败时保留 cursor 以便重试。整理提示词限定为 `User Information`、`Preferences`、`Project Context`、`Important Notes` 四类，并要求非空结果为保留既有与新增有效事实的完整 `MEMORY.md` 替换内容。
+- [x] `MemoryEventConsumer` 会将一次读取到的全部待处理事件按 ID 顺序合并为单次整理请求；批次成功或空结果后 cursor 一次更新到最后一个事件 ID，批次失败时整批保留等待重试。
+- [x] 最近一次全量离线测试：`318 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
+本阶段仍不实现：Cron 表达式、任务编辑/启停、复杂重试与分布式调度；记忆事件的限长批处理、事件归档/删除、自动重试、冲突解决与多进程锁。
+
 ## 最新定时服务（Cron）（2026-09-02）
 
 - [x] 新增 `nanobot/cron/` 子系统：`CronService` 内存调度器、`CronTask` / `CronSchedule` / `CronPayload` / `CronJobState` 数据模型、`CronMessagePublisher` 路由发布，以及 `JsonCronTaskStorage` 原子 JSON 持久化。
@@ -8,10 +20,10 @@
 - [x] 任务持久化到 `<workspace>/cron/tasks.json`，通过临时文件 + `os.replace` 原子替换；写入失败保留原文件。`CronService` 首次使用时惰性加载，重启后恢复任务及其执行状态：已完成的 one-time 任务不会重复执行，周期任务保留上次计算的 `next_run_at`，过期的周期任务重启后补跑一次。
 - [x] 回调执行隔离：单个任务的回调失败（例如发布失败）会记录 `last_error` / `last_status`，不会终止调度循环或其他任务；one-time 任务执行后自动禁用，周期任务执行后按间隔推进 `next_run_at`。
 - [x] `Application` 组装并监管 `CronService` 生命周期：`start()` 中先启动 ChannelManager 再启动 CronService，`close()` 中先停止 CronService 再停止 ChannelManager；新增 `cron_service` / `cron_publisher` 属性与 `cron_service_factory` 注入点。
-- [x] `QQChannel.send()` 支持无来源 `message_id` 的主动消息（C2C 与群聊），使 Cron 触发的回复无需引用原始消息即可发送。
-- [x] 最新全量离线测试：`304 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+- [x] `QQChannel.send()` 支持无来源 `message_id` 的主动消息（C2C 与群聊）。携带 `source=cron` 的出站消息不会回退引用会话中缓存的原始消息，避免 QQ 的 `msg_seq` 去重冲突。
+- [x] 最新全量离线测试：`318 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
 
-本阶段仍不实现：将定时任务暴露为 Agent 可调用工具、任务编辑接口、任务删除/归档历史、跨进程或分布式调度锁、消息级可靠投递与重试、时区 DST 感知重算，以及自然语言到 cron 表达式的解析。
+本阶段仍不实现：任务编辑与启停接口、任务归档历史、跨进程或分布式调度锁、消息级可靠投递与重试、时区 DST 感知重算，以及自然语言到 cron 表达式的解析。
 
 ## 最新 Skills 加载、显式激活与依赖检查（2026-09-01）
 

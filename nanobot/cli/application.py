@@ -73,7 +73,11 @@ class Application:
         self._tool_loader = tool_loader if tool_loader is not None else ToolLoader()
         self._tool_loader.load(
             self._tool_registry,
-            ToolContext(workspace=config.workspace),
+            ToolContext(
+                workspace=config.workspace,
+                cron_service=self._cron_service,
+                cron_timezone=config.cron_timezone,
+            ),
         )
         self._provider = provider_factory(config.provider)
         self._session_manager = SessionManager(config.workspace)

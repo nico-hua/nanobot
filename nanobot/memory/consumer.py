@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from ..providers import BaseMessage
-from .consolidator import MemoryConsolidator
+from .consolidator import MemoryConsolidationOutcome, MemoryConsolidator
 from .store import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -85,16 +85,19 @@ class MemoryEventConsumer:
                 events = self._store.read_events_after(cursor)
                 if not events:
                     return
-                for event in events:
-                    updated = await self._consolidator.consolidate_event(event)
-                    if not updated:
-                        logger.warning(
-                            "Long-term memory event was not consolidated (event_id=%d)",
-                            event.event_id,
-                        )
-                        return
-                    # MEMORY.md must be updated before the cursor skips the event.
-                    self._store.update_cursor(event.event_id)
+                outcome = await self._consolidator.consolidate_events(events)
+                if outcome is MemoryConsolidationOutcome.FAILED:
+                    logger.warning(
+                        "Long-term memory event batch consolidation failed "
+                        "(first_event_id=%d, last_event_id=%d, count=%d)",
+                        events[0].event_id,
+                        events[-1].event_id,
+                        len(events),
+                    )
+                    return
+                # A successful update or intentional empty result means every
+                # event in this batch is fully processed. Only failures retry.
+                self._store.update_cursor(events[-1].event_id)
         except asyncio.CancelledError:
             raise
         except Exception:

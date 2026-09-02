@@ -111,6 +111,19 @@ class NanobotConfigTest(unittest.TestCase):
         self.assertEqual(config.context_window_tokens, 128_000)
         self.assertEqual(config.compaction_threshold_tokens, 64_000)
         self.assertEqual(config.compaction_recent_tokens, 32_000)
+        self.assertEqual(config.cron_timezone, "Asia/Shanghai")
+
+    def test_rejects_an_invalid_cron_timezone(self) -> None:
+        with self.assertRaises(ValidationError):
+            NanobotConfig(
+                provider=ProviderConfig(
+                    type="openai_compat",
+                    api_key="test-key",
+                    api_base="https://example.test/v1",
+                    default_model="test-model",
+                ),
+                cron_timezone="not/a-timezone",
+            )
 
     def test_rejects_a_non_positive_context_window(self) -> None:
         with self.assertRaises(ValidationError):

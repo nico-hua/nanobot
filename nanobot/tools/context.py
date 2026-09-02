@@ -2,8 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..cron import CronService
+
+
+_CURRENT_REQUEST_CONTEXT: ContextVar[RequestContext | None] = ContextVar(
+    "nanobot_tool_request_context",
+    default=None,
+)
 
 
 @dataclass(frozen=True)
@@ -11,7 +24,53 @@ class ToolContext:
     """Dependencies available to tool factories.
 
     Workspace is optional so tools can decide whether they are enabled for a
-    particular agent configuration.
+    particular agent configuration. Runtime-owned services are injected here
+    while the application assembles built-in tools.
     """
 
     workspace: str | Path | None = None
+    cron_service: CronService | None = None
+    cron_timezone: str = "Asia/Shanghai"
+
+
+@dataclass(frozen=True)
+class RequestContext:
+    """Route information available to tools during one AgentRunner execution."""
+
+    session_key: str
+    channel: str
+    chat_id: str
+    sender_id: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("session_key", self.session_key),
+            ("channel", self.channel),
+            ("chat_id", self.chat_id),
+            ("sender_id", self.sender_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Request context {name} must be a non-empty string")
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("Request context metadata must be a mapping")
+        object.__setattr__(self, "metadata", dict(self.metadata))
+
+
+def get_request_context() -> RequestContext | None:
+    """Return the route information bound to the current AgentRunner task."""
+
+    return _CURRENT_REQUEST_CONTEXT.get()
+
+
+@contextmanager
+def bind_request_context(context: RequestContext) -> Iterator[None]:
+    """Bind request route information for one synchronous or asynchronous scope."""
+
+    if not isinstance(context, RequestContext):
+        raise TypeError("Request context binding requires a RequestContext")
+    token = _CURRENT_REQUEST_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _CURRENT_REQUEST_CONTEXT.reset(token)

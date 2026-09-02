@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AliasChoices,
@@ -164,6 +165,7 @@ class NanobotFileConfig(BaseModel):
     context_window_tokens: int = Field(default=128_000, gt=0)
     compaction_threshold_tokens: int = Field(default=64_000, gt=0)
     compaction_recent_tokens: int = Field(default=32_000, ge=0)
+    cron_timezone: str = "Asia/Shanghai"
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     provider: ProviderSettingsConfig
     default_channel: str = "qq"
@@ -175,6 +177,11 @@ class NanobotFileConfig(BaseModel):
         if not value.strip():
             raise ValueError("must not be blank")
         return value
+
+    @field_validator("cron_timezone")
+    @classmethod
+    def _validate_cron_timezone(cls, value: str) -> str:
+        return _validate_timezone(value)
 
     @model_validator(mode="after")
     def _validate_compaction_budgets(self) -> NanobotFileConfig:
@@ -195,6 +202,7 @@ class NanobotConfig(BaseModel):
     context_window_tokens: int = Field(default=128_000, gt=0)
     compaction_threshold_tokens: int = Field(default=64_000, gt=0)
     compaction_recent_tokens: int = Field(default=32_000, ge=0)
+    cron_timezone: str = "Asia/Shanghai"
     default_channel: str = "qq"
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None
@@ -206,3 +214,18 @@ class NanobotConfig(BaseModel):
                 "compaction_recent_tokens must be less than compaction_threshold_tokens"
             )
         return self
+
+    @field_validator("cron_timezone")
+    @classmethod
+    def _validate_cron_timezone(cls, value: str) -> str:
+        return _validate_timezone(value)
+
+
+def _validate_timezone(value: str) -> str:
+    if not value.strip():
+        raise ValueError("must not be blank")
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("must be a valid IANA timezone") from error
+    return value

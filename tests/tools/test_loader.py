@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from nanobot.cron import CronService
 from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry
+from nanobot.tools.builtin import CronTool
 
 
 class ToolLoaderTest(unittest.TestCase):
@@ -88,3 +90,23 @@ class ToolLoaderTest(unittest.TestCase):
 
         self.assertEqual(names, ())
         self.assertEqual(registry.tools, ())
+
+    def test_registers_cron_tool_when_the_service_is_injected(self) -> None:
+        registry = ToolRegistry()
+        service = CronService(_no_op, self.workspace)
+
+        names = ToolLoader().load(
+            registry,
+            ToolContext(
+                workspace=self.workspace,
+                cron_service=service,
+                cron_timezone="Asia/Shanghai",
+            ),
+        )
+
+        self.assertEqual(names, ("cron", *self.EXPECTED_TOOL_NAMES))
+        self.assertIsInstance(registry.get("cron"), CronTool)
+
+
+async def _no_op(task: object) -> None:
+    del task

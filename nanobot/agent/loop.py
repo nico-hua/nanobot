@@ -11,7 +11,7 @@ from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryConsolidator, MemoryEventConsumer, MemoryStore
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
 from ..session import SessionCompactor, SessionManager
-from ..tools import ToolRegistry
+from ..tools import RequestContext, ToolRegistry, bind_request_context
 from .commands import CommandInvocation, CommandRouter
 from .context import ContextBuilder, ContextWindowExceededError
 from .runner import AgentRunner, AgentRunSpec
@@ -312,7 +312,15 @@ class AgentLoop:
                     provider=self._provider,
                     tool_registry=self._tool_registry,
                 )
-                result = await self._runner.run(spec)
+                request_context = RequestContext(
+                    session_key=session_key,
+                    channel=inbound.channel,
+                    chat_id=inbound.chat_id,
+                    sender_id=inbound.sender_id,
+                    metadata=inbound.metadata,
+                )
+                with bind_request_context(request_context):
+                    result = await self._runner.run(spec)
                 completed_messages = _without_system_messages(
                     result.messages[len(spec.messages) :]
                 )

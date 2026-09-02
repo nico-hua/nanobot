@@ -32,7 +32,13 @@ from nanobot.providers import (
     ToolMessage,
 )
 from nanobot.session import SessionCompactor, SessionManager
-from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
+from nanobot.tools import (
+    Tool,
+    ToolParameter,
+    ToolRegistry,
+    ToolResult,
+    get_request_context,
+)
 
 
 class ScriptedProvider(LLMProvider):
@@ -193,6 +199,20 @@ class EchoTool(Tool):
 
     async def execute(self, **arguments: Any) -> ToolResult:
         return ToolResult(content=f"echo: {arguments['value']}")
+
+
+class RequestContextTool(Tool):
+    def __init__(self) -> None:
+        super().__init__(
+            name="request_context",
+            description="Record the current tool request context.",
+        )
+        self.received_context = None
+
+    async def execute(self, **arguments: Any) -> ToolResult:
+        del arguments
+        self.received_context = get_request_context()
+        return ToolResult(content="request context recorded")
 
 
 class FailingRunner(AgentRunner):
@@ -372,6 +392,44 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
                 AIMessage(content="The value was echoed."),
             ),
         )
+
+    async def test_binds_request_context_only_while_the_runner_executes_tools(self) -> None:
+        request = ToolCallRequest(
+            id="call-1",
+            name="request_context",
+            arguments={},
+        )
+        provider = ScriptedProvider(
+            (
+                LLMResponse(tool_calls=(request,)),
+                LLMResponse(content="Done."),
+            )
+        )
+        tool = RequestContextTool()
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry((tool,)),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
+
+        await _dispatch(
+            loop,
+            "Record my request context.",
+            "qq",
+            "chat-1",
+            "session-1",
+            {"qq_chat_type": "c2c"},
+        )
+
+        self.assertIsNotNone(tool.received_context)
+        self.assertEqual(tool.received_context.session_key, "session-1")
+        self.assertEqual(tool.received_context.channel, "qq")
+        self.assertEqual(tool.received_context.chat_id, "chat-1")
+        self.assertEqual(tool.received_context.sender_id, "test-sender")
+        self.assertEqual(tool.received_context.metadata, {"qq_chat_type": "c2c"})
+        self.assertIsNone(get_request_context())
 
     async def test_empty_session_id_falls_back_to_channel_and_chat_id(self) -> None:
         provider = ScriptedProvider(
@@ -1280,5 +1338,5 @@ def _is_summary_request(messages: tuple[BaseMessage, ...]) -> bool:
 
 def _is_memory_request(messages: tuple[BaseMessage, ...]) -> bool:
     return bool(messages) and isinstance(messages[0], SystemMessage) and messages[0].content.startswith(
-        "Update the long-term memory"
+        "Maintain the long-term memory"
     )

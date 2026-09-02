@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Sequence
+from enum import Enum
 from typing import Any
 
 from ..providers import (
@@ -21,13 +22,33 @@ from .store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
-_CONSOLIDATION_INSTRUCTIONS = """Update the long-term memory for a future Agent.
-Extract only stable, high-value information: enduring user preferences, confirmed
-project conventions, important facts, and decisions needed by future tasks. Ignore
-small talk, temporary status, one-off task details, duplicates, and sensitive data.
-Return only the complete replacement MEMORY.md content. If there is no durable
-information to retain, return an empty response. Reprocessing the same conversation
-must not duplicate existing facts. Do not call tools."""
+_CONSOLIDATION_INSTRUCTIONS = """Maintain the long-term memory for a future Agent.
+Keep only stable, high-value information from the existing memory and completed
+conversation: confirmed user facts, enduring preferences, project conventions, and
+important decisions needed by later work. Ignore small talk, temporary status,
+one-off task details, duplicates, and sensitive information.
+
+Return only the complete replacement MEMORY.md content. Use only these Markdown
+sections, omitting a section when it has no content:
+
+## User Information
+## Preferences
+## Project Context
+## Important Notes
+
+When there is durable information, include both applicable existing memory and new
+confirmed facts in the replacement so no valid prior memory is lost. If neither the
+existing memory nor this conversation contains durable information to retain, return
+an empty response. Reprocessing the same conversation must not duplicate facts. Do
+not call tools."""
+
+
+class MemoryConsolidationOutcome(Enum):
+    """The result of processing one durable memory event."""
+
+    UPDATED = "updated"
+    SKIPPED = "skipped"
+    FAILED = "failed"
 
 
 class MemoryConsolidator:
@@ -51,17 +72,39 @@ class MemoryConsolidator:
             return False
 
         async with self._workspace_lock:
-            return await self._consolidate(conversation)
+            outcome = await self._consolidate(conversation)
+        return outcome is MemoryConsolidationOutcome.UPDATED
 
-    async def consolidate_event(self, event: MemoryEvent) -> bool:
+    async def consolidate_event(self, event: MemoryEvent) -> MemoryConsolidationOutcome:
         """Consolidate one durable event without appending duplicate memory content."""
 
         if not isinstance(event, MemoryEvent):
             raise TypeError("MemoryConsolidator requires a MemoryEvent")
-        async with self._workspace_lock:
-            return await self._consolidate(event.messages)
+        return await self.consolidate_events((event,))
 
-    async def _consolidate(self, messages: tuple[BaseMessage, ...]) -> bool:
+    async def consolidate_events(
+        self,
+        events: Sequence[MemoryEvent],
+    ) -> MemoryConsolidationOutcome:
+        """Consolidate one ordered batch of durable events in a single request."""
+
+        if not isinstance(events, Sequence) or not events:
+            raise ValueError("MemoryConsolidator requires at least one MemoryEvent")
+        if not all(isinstance(event, MemoryEvent) for event in events):
+            raise TypeError("MemoryConsolidator requires MemoryEvent instances")
+
+        messages = tuple(
+            message
+            for event in events
+            for message in event.messages
+        )
+        async with self._workspace_lock:
+            return await self._consolidate(messages)
+
+    async def _consolidate(
+        self,
+        messages: tuple[BaseMessage, ...],
+    ) -> MemoryConsolidationOutcome:
         request = HumanMessage(
             content=_consolidation_request_content(
                 self._memory_store.read(),
@@ -76,19 +119,22 @@ class MemoryConsolidator:
             raise
         except Exception:
             logger.exception("Long-term memory consolidation request failed")
-            return False
+            return MemoryConsolidationOutcome.FAILED
 
         content = (response.content or "").strip()
-        if not content or response.tool_calls:
+        if not content:
+            logger.debug("Long-term memory consolidation found no durable information")
+            return MemoryConsolidationOutcome.SKIPPED
+        if response.tool_calls:
             logger.warning("Long-term memory consolidation returned no usable content")
-            return False
+            return MemoryConsolidationOutcome.FAILED
 
         try:
             self._memory_store.write(content)
         except (OSError, UnicodeError):
             logger.exception("Long-term memory update failed")
-            return False
-        return True
+            return MemoryConsolidationOutcome.FAILED
+        return MemoryConsolidationOutcome.UPDATED
 
 
 def _consolidation_request_content(

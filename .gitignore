@@ -18,3 +18,4 @@ botpy.log*
 
 # Editor settings
 .vscode/
+.claude

@@ -8,7 +8,12 @@ import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
-from nanobot.memory import MemoryConsolidator, MemoryStore
+from nanobot.memory import (
+    MemoryConsolidationOutcome,
+    MemoryConsolidator,
+    MemoryEventConsumer,
+    MemoryStore,
+)
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -84,6 +89,11 @@ class MemoryConsolidatorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(request["completed_messages"][0]["content"], "Remember my preference.")
         self.assertEqual(request["completed_messages"][1]["role"], "assistant")
+        instructions = provider.complete_calls[0][0].content
+        self.assertIn("## User Information", instructions)
+        self.assertIn("## Preferences", instructions)
+        self.assertIn("## Project Context", instructions)
+        self.assertIn("## Important Notes", instructions)
 
     async def test_no_long_term_information_leaves_existing_memory_unchanged(self) -> None:
         self._store.write("Existing memory.")
@@ -157,11 +167,83 @@ class MemoryConsolidatorTest(unittest.IsolatedAsyncioTestCase):
         )
         consolidator = MemoryConsolidator(provider, self._store)
 
-        self.assertTrue(await consolidator.consolidate_event(event))
-        self.assertTrue(await consolidator.consolidate_event(event))
+        self.assertEqual(
+            await consolidator.consolidate_event(event),
+            MemoryConsolidationOutcome.UPDATED,
+        )
+        self.assertEqual(
+            await consolidator.consolidate_event(event),
+            MemoryConsolidationOutcome.UPDATED,
+        )
 
         self.assertEqual(self._store.read(), "Stable project convention.")
         self.assertEqual(self._store.read().count("Stable project convention."), 1)
+
+    async def test_empty_successful_event_advances_the_memory_cursor(self) -> None:
+        provider = ConsolidationProvider((LLMResponse(content=""),))
+        consumer = MemoryEventConsumer(
+            self._store,
+            MemoryConsolidator(provider, self._store),
+        )
+        event = self._store.append_event("session-1", _completed_messages())
+
+        consumer.wake()
+        await consumer.wait()
+
+        self.assertEqual(self._store.read_cursor(), event.event_id)
+        self.assertEqual(self._store.read(), "")
+
+    async def test_pending_events_are_consolidated_as_one_batch(self) -> None:
+        provider = ConsolidationProvider((LLMResponse(content="Updated memory."),))
+        consumer = MemoryEventConsumer(
+            self._store,
+            MemoryConsolidator(provider, self._store),
+        )
+        first_event = self._store.append_event(
+            "session-1",
+            (
+                HumanMessage(content="First completed turn."),
+                AIMessage(content="First answer."),
+            ),
+        )
+        last_event = self._store.append_event(
+            "session-2",
+            (
+                HumanMessage(content="Second completed turn."),
+                AIMessage(content="Second answer."),
+            ),
+        )
+
+        consumer.wake()
+        await consumer.wait()
+
+        self.assertEqual(len(provider.complete_calls), 1)
+        request = json.loads(provider.complete_calls[0][1].content)
+        self.assertEqual(
+            [message["content"] for message in request["completed_messages"]],
+            [
+                "First completed turn.",
+                "First answer.",
+                "Second completed turn.",
+                "Second answer.",
+            ],
+        )
+        self.assertEqual(self._store.read_cursor(), last_event.event_id)
+        self.assertEqual(first_event.event_id, 1)
+        self.assertEqual(self._store.read(), "Updated memory.")
+
+    async def test_failed_event_does_not_advance_the_memory_cursor(self) -> None:
+        provider = ConsolidationProvider((RuntimeError("provider unavailable"),))
+        consumer = MemoryEventConsumer(
+            self._store,
+            MemoryConsolidator(provider, self._store),
+        )
+        self._store.append_event("session-1", _completed_messages())
+
+        consumer.wake()
+        await consumer.wait()
+
+        self.assertEqual(self._store.read_cursor(), 0)
 
 
 def _completed_messages() -> tuple[BaseMessage, ...]:
