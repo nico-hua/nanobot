@@ -1,5 +1,18 @@
 # 项目开发进度
 
+## 最新定时服务（Cron）（2026-09-02）
+
+- [x] 新增 `nanobot/cron/` 子系统：`CronService` 内存调度器、`CronTask` / `CronSchedule` / `CronPayload` / `CronJobState` 数据模型、`CronMessagePublisher` 路由发布，以及 `JsonCronTaskStorage` 原子 JSON 持久化。
+- [x] `CronService` 支持一次性任务（`add_at`）与周期任务（`add_every`），统一通过一个共享回调触发；调度基于 UTC 毫秒时间戳，时区（默认 `Asia/Shanghai`）作为元数据保存并校验为合法 IANA 时区。
+- [x] 到期任务由 `CronMessagePublisher` 转换为普通入站消息发布到共享 `MessageBus`：携带 channel / chat_id / sender_id / session_key 与 `source=cron`、`cron_task_id` 等 metadata，经 `AgentLoop` 走完整 Agent 流程后在原会话中回复用户。
+- [x] 任务持久化到 `<workspace>/cron/tasks.json`，通过临时文件 + `os.replace` 原子替换；写入失败保留原文件。`CronService` 首次使用时惰性加载，重启后恢复任务及其执行状态：已完成的 one-time 任务不会重复执行，周期任务保留上次计算的 `next_run_at`，过期的周期任务重启后补跑一次。
+- [x] 回调执行隔离：单个任务的回调失败（例如发布失败）会记录 `last_error` / `last_status`，不会终止调度循环或其他任务；one-time 任务执行后自动禁用，周期任务执行后按间隔推进 `next_run_at`。
+- [x] `Application` 组装并监管 `CronService` 生命周期：`start()` 中先启动 ChannelManager 再启动 CronService，`close()` 中先停止 CronService 再停止 ChannelManager；新增 `cron_service` / `cron_publisher` 属性与 `cron_service_factory` 注入点。
+- [x] `QQChannel.send()` 支持无来源 `message_id` 的主动消息（C2C 与群聊），使 Cron 触发的回复无需引用原始消息即可发送。
+- [x] 最新全量离线测试：`304 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
+本阶段仍不实现：将定时任务暴露为 Agent 可调用工具、任务编辑接口、任务删除/归档历史、跨进程或分布式调度锁、消息级可靠投递与重试、时区 DST 感知重算，以及自然语言到 cron 表达式的解析。
+
 ## 最新 Skills 加载、显式激活与依赖检查（2026-09-01）
 
 - [x] 新增仅面向 `<workspace>/skills/<skill_name>/SKILL.md` 的 `SkillsLoader`：稳定扫描并读取静态 Markdown Skill，支持 `name`、`description`、`always` frontmatter；文件缺失、不可读或 frontmatter 格式错误时跳过对应 Skill，不会影响其他 Skill 或 Agent 请求。
@@ -60,7 +73,7 @@
 - [x] 新增配置加载器，校验 JSON、合并 API key 为运行时 `ProviderConfig`。
 - [x] OpenAI-compatible 与 Anthropic-compatible Provider 支持初始化默认 `max_tokens` / `temperature`，单次调用的显式参数优先。
 
-最后更新：2026-09-01
+最后更新：2026-09-02
 
 ## 项目目标
 

@@ -13,6 +13,7 @@ from nanobot.bus import MessageBus
 from nanobot.channels import BaseChannel, ChannelManager, FakeChannel
 from nanobot.cli import Application
 from nanobot.config import MCPServerConfig, NanobotConfig, ProviderConfig
+from nanobot.cron import CronCallback, CronService
 from nanobot.memory import MemoryConsolidator
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
 from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry
@@ -173,7 +174,62 @@ class FakeChannelManager:
             raise self._error
 
 
+class RecordingCronService(CronService):
+    def __init__(
+        self,
+        callback: CronCallback,
+        workspace: Path,
+        events: list[str],
+        *,
+        record_events: bool = True,
+    ) -> None:
+        self.callback = callback
+        self.workspace = workspace
+        self.events = events
+        self._record_events = record_events
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        if self._record_events:
+            self.events.append("cron.start")
+        self.started = True
+
+    async def stop(self) -> None:
+        if self._record_events:
+            self.events.append("cron.stop")
+        self.stopped = True
+
+
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_manages_cron_service_lifecycle(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        cron_services: list[RecordingCronService] = []
+
+        def cron_service_factory(callback: CronCallback, workspace: Path) -> CronService:
+            service = RecordingCronService(callback, workspace, events)
+            cron_services.append(service)
+            return service
+
+        app, manager = _fake_application(
+            events,
+            loop,
+            cron_service_factory=cron_service_factory,
+        )
+        cron_service = cron_services[0]
+
+        await app.start()
+
+        self.assertIs(app.cron_service, cron_service)
+        self.assertTrue(cron_service.started)
+        self.assertLess(events.index("channel_manager.start"), events.index("cron.start"))
+        await app.close()
+
+        self.assertTrue(cron_service.stopped)
+        self.assertLess(events.index("cron.stop"), events.index("channel_manager.stop"))
+        self.assertEqual(manager.stop_calls, 1)
+
     async def test_assembles_shared_dependencies_and_closes_in_reverse_order(self) -> None:
         events: list[str] = []
         received_context_builders: list[ContextBuilder] = []
@@ -447,8 +503,17 @@ def _fake_application(
     loop: RecordingLoop,
     *,
     manager_start_error: Exception | None = None,
+    cron_service_factory: Callable[[CronCallback, Path], CronService] | None = None,
 ) -> tuple[Application, FakeChannelManager]:
     managers: list[FakeChannelManager] = []
+    cron_service_factory = cron_service_factory or (
+        lambda callback, workspace: RecordingCronService(
+            callback,
+            workspace,
+            events,
+            record_events=False,
+        )
+    )
 
     def manager_factory(
         message_bus: MessageBus,
@@ -475,5 +540,6 @@ def _fake_application(
         tool_loader=NoopToolLoader(),
         agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
+        cron_service_factory=cron_service_factory,
     )
     return app, managers[0]

@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from ..agent import AgentLoop, AgentRunner, ContextBuilder
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
 from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
+from ..cron import CronCallback, CronMessagePublisher, CronService
 from ..mcp import MCPProvider
 from ..memory import MemoryConsolidator, MemoryStore
 from ..providers import LLMProvider, create_default_provider_factory
@@ -37,6 +39,7 @@ AgentLoopFactory = Callable[
     AgentLoop,
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
+CronServiceFactory = Callable[[CronCallback, Path], CronService]
 
 
 class Application:
@@ -52,6 +55,7 @@ class Application:
         tool_loader: ToolLoader | None = None,
         agent_loop_factory: AgentLoopFactory | None = None,
         channel_manager_factory: ChannelManagerFactory = ChannelManager,
+        cron_service_factory: CronServiceFactory = CronService,
     ) -> None:
         if not isinstance(config, NanobotConfig):
             raise TypeError("Application requires a NanobotConfig")
@@ -63,6 +67,8 @@ class Application:
         channel_factory = channel_factory or create_default_channel_factory().create
         agent_loop_factory = agent_loop_factory or _create_agent_loop
         self._message_bus = MessageBus()
+        self._cron_publisher = CronMessagePublisher(self._message_bus)
+        self._cron_service = cron_service_factory(self._cron_publisher.publish, config.workspace)
         self._tool_registry = ToolRegistry()
         self._tool_loader = tool_loader if tool_loader is not None else ToolLoader()
         self._tool_loader.load(
@@ -147,6 +153,18 @@ class Application:
         return self._channel_manager
 
     @property
+    def cron_service(self) -> CronService:
+        """Return the scheduler managed by this application's lifecycle."""
+
+        return self._cron_service
+
+    @property
+    def cron_publisher(self) -> CronMessagePublisher:
+        """Return the callback that routes due Cron tasks through the MessageBus."""
+
+        return self._cron_publisher
+
+    @property
     def agent_task(self) -> asyncio.Task[None] | None:
         """Return the AgentLoop task while it is managed by the application."""
 
@@ -205,6 +223,7 @@ class Application:
             self._channel_task = self._channel_manager.dispatcher_task
             if self._channel_task is None:
                 raise RuntimeError("ChannelManager did not create a dispatcher task")
+            await self._cron_service.start()
         except asyncio.CancelledError:
             await self.close()
             raise
@@ -231,21 +250,28 @@ class Application:
             self._stop_event.set()
             logger.info("Application stopping")
             try:
-                await self._channel_manager.stop_all()
+                await self._cron_service.stop()
             except asyncio.CancelledError:
                 raise
             except Exception:
-                logger.exception("Application failed while stopping the ChannelManager")
+                logger.exception("Application failed while stopping CronService")
             finally:
-                self._channel_task = None
-                await self._cancel_agent_task()
-                await self._close_agent_loop()
                 try:
-                    await self._mcp_provider.close()
+                    await self._channel_manager.stop_all()
                 except asyncio.CancelledError:
                     raise
                 except Exception:
-                    logger.exception("Application failed while closing MCP connections")
+                    logger.exception("Application failed while stopping the ChannelManager")
+                finally:
+                    self._channel_task = None
+                    await self._cancel_agent_task()
+                    await self._close_agent_loop()
+                    try:
+                        await self._mcp_provider.close()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.exception("Application failed while closing MCP connections")
             self._started = False
             logger.info("Application stopped")
 

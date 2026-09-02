@@ -1179,6 +1179,39 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(provider.memory_requests, [])
         self.assertEqual(store.read_events_after(0), ())
 
+    async def test_cron_message_uses_session_context_and_persists(self) -> None:
+        provider = ScriptedProvider(
+            (
+                LLMResponse(content="Initial answer."),
+                LLMResponse(content="Scheduled answer."),
+            )
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
+
+        await _dispatch(loop, "Initial question.", "test", "chat-1", "session-1")
+        saved_messages = self._sessions.get_or_create("session-1").messages
+        await _dispatch(
+            loop,
+            "Run scheduled work.",
+            "test",
+            "chat-1",
+            "session-1",
+            {"source": "cron"},
+        )
+
+        updated_messages = self._sessions.get_or_create("session-1").messages
+        self.assertEqual(provider.complete_calls[1][1:-1], saved_messages)
+        self.assertEqual(provider.complete_calls[1][-1], HumanMessage(content="Run scheduled work."))
+        self.assertEqual(updated_messages[: len(saved_messages)], saved_messages)
+        self.assertEqual(updated_messages[-2], HumanMessage(content="Run scheduled work."))
+        self.assertEqual(updated_messages[-1], AIMessage(content="Scheduled answer."))
+
     async def test_returns_a_user_facing_message_when_required_context_exceeds_the_window(self) -> None:
         provider = ScriptedProvider(())
         loop = AgentLoop(

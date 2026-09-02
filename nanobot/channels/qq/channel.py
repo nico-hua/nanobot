@@ -110,7 +110,7 @@ class QQChannel(BaseChannel):
         return await self._publish_inbound(message, _GROUP, sender_id, chat_id)
 
     async def send(self, message: OutboundMessage) -> None:
-        """Send one Markdown response through the matching QQ API."""
+        """Send one Markdown reply or initiated message through the QQ API."""
 
         self._validate_outbound_message(message)
         if self._client is None:
@@ -123,25 +123,26 @@ class QQChannel(BaseChannel):
         message_id = _metadata_text(message.metadata, "message_id") or (
             context.message_id if context is not None else None
         )
-        if message_id is None:
-            raise ValueError("QQ outbound message requires an originating message_id")
-
         api = self._client.api
         markdown = {"content": message.content}
         if chat_type == _C2C:
-            result = api.post_c2c_message(
-                openid=message.chat_id,
-                msg_type=2,
-                markdown=markdown,
-                msg_id=message_id,
-            )
+            arguments = {
+                "openid": message.chat_id,
+                "msg_type": 2,
+                "markdown": markdown,
+            }
+            if message_id is not None:
+                arguments["msg_id"] = message_id
+            result = api.post_c2c_message(**arguments)
         elif chat_type == _GROUP:
-            result = api.post_group_message(
-                group_openid=message.chat_id,
-                msg_type=2,
-                markdown=markdown,
-                msg_id=message_id,
-            )
+            arguments = {
+                "group_openid": message.chat_id,
+                "msg_type": 2,
+                "markdown": markdown,
+            }
+            if message_id is not None:
+                arguments["msg_id"] = message_id
+            result = api.post_group_message(**arguments)
         else:
             raise ValueError(f"Unknown QQ chat type for outbound message: {chat_type}")
 

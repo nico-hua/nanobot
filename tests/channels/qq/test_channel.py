@@ -149,6 +149,56 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_sends_an_initiated_message_without_an_originating_message_id(self) -> None:
+        bus = MessageBus()
+        client = FakeQQClient()
+        channel = _channel(bus, client)
+        await channel.start()
+        await asyncio.sleep(0)
+
+        await channel.send(
+            OutboundMessage(
+                channel="qq",
+                chat_id="user-1",
+                sender_id="cron",
+                session_id="qq:user-1",
+                content="Scheduled greeting",
+                metadata={"qq_chat_type": "c2c", "source": "cron"},
+            )
+        )
+        await channel.send(
+            OutboundMessage(
+                channel="qq",
+                chat_id="group-1",
+                sender_id="cron",
+                session_id="qq:group-1",
+                content="Scheduled group greeting",
+                metadata={"qq_chat_type": "group", "source": "cron"},
+            )
+        )
+        await channel.stop()
+
+        self.assertEqual(
+            client.api.c2c_calls,
+            [
+                {
+                    "openid": "user-1",
+                    "msg_type": 2,
+                    "markdown": {"content": "Scheduled greeting"},
+                }
+            ],
+        )
+        self.assertEqual(
+            client.api.group_calls,
+            [
+                {
+                    "group_openid": "group-1",
+                    "msg_type": 2,
+                    "markdown": {"content": "Scheduled group greeting"},
+                }
+            ],
+        )
+
     async def test_allow_from_rejects_unauthorized_sender(self) -> None:
         bus = MessageBus()
         channel = _channel(
