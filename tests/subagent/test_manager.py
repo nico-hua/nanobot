@@ -23,7 +23,14 @@ from nanobot.providers import (
     SystemMessage,
 )
 from nanobot.subagent import SubagentManager
-from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry, ToolResult
+from nanobot.tools import (
+    Tool,
+    ToolContext,
+    ToolLoader,
+    ToolRegistry,
+    ToolResult,
+    get_request_context,
+)
 
 
 class UnusedProvider(LLMProvider):
@@ -89,6 +96,17 @@ class FailingRunner(AgentRunner):
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
         del spec
         raise AgentRunnerError("expected subagent failure")
+
+
+class RuntimeRecordingRunner(AgentRunner):
+    def __init__(self, result: AgentRunResult) -> None:
+        self.result = result
+        self.request_context = None
+
+    async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        del spec
+        self.request_context = get_request_context()
+        return self.result
 
 
 class SpawnTool(Tool):
@@ -177,6 +195,25 @@ class SubagentManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runner.specs[0].blocked_tool_names, ())
         self.assertEqual(runner.specs[1].blocked_tool_names, ())
 
+    async def test_binds_the_request_context_for_child_tools(self) -> None:
+        runner = RuntimeRecordingRunner(_agent_result("Completed."))
+        manager = self._manager(runner)
+        request_context = _request_context()
+
+        await manager.run("Use the current runtime.", request_context=request_context)
+
+        self.assertIs(runner.request_context, request_context)
+
+    async def test_loads_workspace_tools_into_the_child_registry(self) -> None:
+        runner = RecordingRunner(_agent_result("Completed."))
+        manager = self._manager(runner)
+
+        await manager.run("Inspect the workspace.")
+
+        read_file = runner.specs[0].tool_registry.get("read_file")
+        self.assertIsNotNone(read_file)
+        self.assertEqual(getattr(read_file, "workspace", None), self._workspace.resolve())
+
     async def test_returns_a_clear_error_when_the_runner_fails(self) -> None:
         manager = self._manager(FailingRunner())
 
@@ -206,4 +243,15 @@ def _agent_result(content: str) -> AgentRunResult:
         tools_used=(),
         token_usage=None,
         stop_reason="stop",
+    )
+
+
+def _request_context():
+    from nanobot.tools import RequestContext
+
+    return RequestContext(
+        session_key="session-1",
+        channel="fake",
+        chat_id="chat-1",
+        sender_id="sender-1",
     )

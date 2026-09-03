@@ -14,7 +14,13 @@ from ..agent import (
     ContextBuilder,
 )
 from ..providers import HumanMessage, LLMProvider, SystemMessage
-from ..tools import ToolContext, ToolLoader, ToolRegistry
+from ..tools import (
+    RequestContext,
+    ToolContext,
+    ToolLoader,
+    ToolRegistry,
+    bind_request_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +73,18 @@ class SubagentManager:
         self._tool_registry = ToolRegistry()
         (tool_loader or ToolLoader()).load(self._tool_registry, tool_context)
 
-    async def run(self, task: str) -> SubagentRunResult:
+    async def run(
+        self,
+        task: str,
+        *,
+        request_context: RequestContext | None = None,
+    ) -> SubagentRunResult:
         """Run one task without parent history, sessions, or message routing."""
 
         if not isinstance(task, str) or not task.strip():
             raise ValueError("Subagent task must be a non-empty string")
+        if request_context is not None and not isinstance(request_context, RequestContext):
+            raise TypeError("Subagent request_context must be a RequestContext or None")
 
         spec = AgentRunSpec(
             messages=(
@@ -84,7 +97,11 @@ class SubagentManager:
             tool_registry=self._tool_registry,
         )
         try:
-            result = await self._runner.run(spec)
+            if request_context is None:
+                result = await self._runner.run(spec)
+            else:
+                with bind_request_context(request_context):
+                    result = await self._runner.run(spec)
         except asyncio.CancelledError:
             raise
         except AgentRunnerError:
