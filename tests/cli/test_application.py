@@ -279,8 +279,9 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             memory_store: Any,
             memory_consolidator: MemoryConsolidator,
             bus: MessageBus,
+            subagent_manager: Any,
         ) -> RecordingLoop:
-            del runner, provider, registry, session_manager, session_compactor, memory_store
+            del runner, provider, registry, session_manager, session_compactor, memory_store, subagent_manager
             received_context_builders.append(context_builder)
             received_memory_consolidators.append(memory_consolidator)
             return _configure_loop(loop, bus)
@@ -336,7 +337,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=tool_loader,
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: _configure_loop(loop, bus),
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus, subagent_manager: _configure_loop(loop, bus),
         )
 
         self.assertEqual(len(tool_loader.contexts), 2)
@@ -365,7 +366,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus, subagent_manager: loop,
         )
 
         with self.assertRaisesRegex(RuntimeError, "channel unavailable"):
@@ -395,7 +396,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
                 events,
             ),
             tool_loader=NoopToolLoader(),
-            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: loop,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus, subagent_manager: loop,
         )
 
         task = asyncio.create_task(app.run())
@@ -577,7 +578,7 @@ def _fake_application(
             events,
         ),
         tool_loader=NoopToolLoader(),
-        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: _configure_loop(loop, bus),
+        agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus, subagent_manager: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
         cron_service_factory=cron_service_factory,
     )

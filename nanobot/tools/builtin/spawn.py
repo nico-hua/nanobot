@@ -1,4 +1,4 @@
-"""A built-in tool for synchronously running one isolated subagent task."""
+"""A built-in tool for running one isolated subagent task."""
 
 from __future__ import annotations
 
@@ -21,13 +21,24 @@ class SpawnTool(Tool):
         self._subagent_manager = subagent_manager
         super().__init__(
             name="spawn",
-            description="Run a focused subagent task and return its final result.",
+            description=(
+                "Run a focused subagent task. Set wait to false for longer tasks "
+                "whose result can be delivered in a later message."
+            ),
             parameters=(
                 ToolParameter(
                     name="task",
                     description="The focused task for the subagent to complete.",
                     type="string",
                     required=True,
+                ),
+                ToolParameter(
+                    name="wait",
+                    description=(
+                        "Whether to wait for the final result. Defaults to true; "
+                        "set false for a background task."
+                    ),
+                    type="boolean",
                 ),
             ),
         )
@@ -42,14 +53,36 @@ class SpawnTool(Tool):
             raise ValueError("SpawnTool requires a SubagentManager")
         return cls(context.subagent_manager)
 
-    async def execute(self, task: str) -> ToolResult:
-        """Synchronously run the child task inside the current request context."""
+    async def execute(self, task: str, wait: bool = True) -> ToolResult:
+        """Run the child task now or schedule it for later delivery."""
 
         if not isinstance(task, str) or not task.strip():
             return _tool_error("Task must be a non-empty string")
+        if not isinstance(wait, bool):
+            return _tool_error("wait must be a boolean")
         request_context = get_request_context()
         if request_context is None:
             return _tool_error("Spawn is only available while processing a user message")
+
+        if not wait:
+            try:
+                task_id = self._subagent_manager.start_background(
+                    task.strip(),
+                    request_context=request_context,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.exception("Background subagent spawn failed")
+                return _tool_error(
+                    f"Background subagent could not start: {type(error).__name__}"
+                )
+            return ToolResult(
+                content=(
+                    "Background subagent task started "
+                    f"(task_id={task_id}). Its result will be delivered when ready."
+                )
+            )
 
         try:
             result = await self._subagent_manager.run(

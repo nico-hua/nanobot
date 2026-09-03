@@ -37,6 +37,7 @@ AgentLoopFactory = Callable[
         MemoryStore,
         MemoryConsolidator,
         MessageBus,
+        SubagentManager,
     ],
     AgentLoop,
 ]
@@ -92,6 +93,7 @@ class Application:
             self._context_builder,
             subagent_tool_context,
             self._tool_loader,
+            self._message_bus,
         )
         self._tool_loader.load(
             self._tool_registry,
@@ -125,6 +127,7 @@ class Application:
             self._memory_store,
             self._memory_consolidator,
             self._message_bus,
+            self._subagent_manager,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
         self._channel_manager = channel_manager_factory(self._message_bus, (channel,))
@@ -356,6 +359,7 @@ def _create_agent_loop(
     memory_store: MemoryStore,
     memory_consolidator: MemoryConsolidator,
     message_bus: MessageBus,
+    subagent_manager: SubagentManager,
 ) -> AgentLoop:
     return AgentLoop(
         runner,
@@ -367,4 +371,5 @@ def _create_agent_loop(
         session_compactor=session_compactor,
         memory_store=memory_store,
         memory_consolidator=memory_consolidator,
+        subagent_manager=subagent_manager,
     )

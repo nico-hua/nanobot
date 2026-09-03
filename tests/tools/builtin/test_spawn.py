@@ -15,6 +15,7 @@ class RecordingSubagentManager(SubagentManager):
     def __init__(self, result: SubagentRunResult) -> None:
         self.result = result
         self.calls: list[tuple[str, RequestContext | None]] = []
+        self.background_calls: list[tuple[str, RequestContext]] = []
 
     async def run(
         self,
@@ -24,6 +25,15 @@ class RecordingSubagentManager(SubagentManager):
     ) -> SubagentRunResult:
         self.calls.append((task, request_context))
         return self.result
+
+    def start_background(
+        self,
+        task: str,
+        *,
+        request_context: RequestContext,
+    ) -> str:
+        self.background_calls.append((task, request_context))
+        return "background-task-1"
 
 
 class RaisingSubagentManager(RecordingSubagentManager):
@@ -54,7 +64,11 @@ class SpawnToolTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(SpawnTool.enabled(ToolContext(subagent_manager=manager)))
         self.assertFalse(SpawnTool.enabled(ToolContext()))
         self.assertEqual(tool.name, "spawn")
-        self.assertEqual(tool.description, "Run a focused subagent task and return its final result.")
+        self.assertEqual(
+            tool.description,
+            "Run a focused subagent task. Set wait to false for longer tasks "
+            "whose result can be delivered in a later message.",
+        )
         self.assertEqual(
             tool.parameters_schema,
             {
@@ -63,6 +77,13 @@ class SpawnToolTest(unittest.IsolatedAsyncioTestCase):
                     "task": {
                         "type": "string",
                         "description": "The focused task for the subagent to complete.",
+                    },
+                    "wait": {
+                        "type": "boolean",
+                        "description": (
+                            "Whether to wait for the final result. Defaults to true; "
+                            "set false for a background task."
+                        ),
                     },
                 },
                 "required": ["task"],
@@ -81,6 +102,21 @@ class SpawnToolTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.content, "Child result.")
         self.assertEqual(manager.calls, [("Investigate the issue.", self._request_context)])
+
+    async def test_starts_background_work_without_waiting_for_the_subagent(self) -> None:
+        manager = RecordingSubagentManager(_success("unused"))
+        tool = SpawnTool(manager)
+
+        with bind_request_context(self._request_context):
+            result = await tool.execute("  Investigate later.  ", wait=False)
+
+        self.assertTrue(result.success)
+        self.assertIn("background-task-1", result.content)
+        self.assertEqual(manager.calls, [])
+        self.assertEqual(
+            manager.background_calls,
+            [("Investigate later.", self._request_context)],
+        )
 
     async def test_returns_clear_errors_for_missing_runtime_and_failed_subagent(self) -> None:
         failed_manager = RecordingSubagentManager(

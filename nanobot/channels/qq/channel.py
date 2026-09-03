@@ -120,11 +120,11 @@ class QQChannel(BaseChannel):
         chat_type = _metadata_text(message.metadata, "qq_chat_type") or (
             context.chat_type if context is not None else None
         )
-        # Cron responses are initiated messages.  They must not reuse a cached
-        # inbound ``msg_id``: qq-botpy would then submit its default
+        # Delayed runtime results are initiated messages. They must not reuse a
+        # cached inbound ``msg_id``: qq-botpy would otherwise submit its default
         # ``msg_seq=1`` again and QQ would deduplicate the request.
         message_id = None
-        if message.metadata.get("source") != "cron":
+        if message.metadata.get("source") not in {"cron", "subagent"}:
             message_id = _metadata_text(message.metadata, "message_id") or (
                 context.message_id if context is not None else None
             )

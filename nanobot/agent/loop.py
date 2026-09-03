@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryConsolidator, MemoryEventConsumer, MemoryStore
@@ -15,6 +15,9 @@ from ..tools import RequestContext, ToolRegistry, bind_request_context
 from .commands import CommandInvocation, CommandRouter
 from .context import ContextBuilder, ContextWindowExceededError
 from .runner import AgentRunner, AgentRunSpec
+
+if TYPE_CHECKING:
+    from ..subagent import SubagentManager
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ class AgentLoop:
         memory_store: MemoryStore | None = None,
         memory_consolidator: MemoryConsolidator | None = None,
         command_router: CommandRouter | None = None,
+        subagent_manager: SubagentManager | None = None,
     ) -> None:
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
@@ -84,6 +88,7 @@ class AgentLoop:
             if memory_store is not None and memory_consolidator is not None
             else None
         )
+        self._subagent_manager = subagent_manager
         self._command_router = command_router or CommandRouter(
             session_manager,
             session_compactor=session_compactor,
@@ -135,6 +140,8 @@ class AgentLoop:
         if self._closed:
             return
         self._closed = True
+        if self._subagent_manager is not None:
+            await self._subagent_manager.close()
         # Application 关闭时统一取消请求、压缩和记忆消费者，避免遗留后台任务。
         tasks = set(self._compaction_tasks)
         tasks.update(self._inbound_tasks)

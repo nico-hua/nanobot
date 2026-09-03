@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
@@ -14,6 +15,7 @@ from nanobot.agent import (
     AgentRunnerError,
     ContextBuilder,
 )
+from nanobot.bus import MessageBus
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -106,6 +108,24 @@ class RuntimeRecordingRunner(AgentRunner):
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
         del spec
         self.request_context = get_request_context()
+        return self.result
+
+
+class BlockingRunner(AgentRunner):
+    def __init__(self, result: AgentRunResult) -> None:
+        self.result = result
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        del spec
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
         return self.result
 
 
@@ -223,16 +243,96 @@ class SubagentManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result.agent_result)
         self.assertEqual(result.error, "Subagent could not complete the task.")
 
+    async def test_background_task_publishes_its_result_to_the_original_route(self) -> None:
+        bus = MessageBus()
+        runner = BlockingRunner(_agent_result("Child result."))
+        manager = self._manager(runner, message_bus=bus)
+        request_context = _request_context(
+            metadata={
+                "qq_chat_type": "c2c",
+                "message_id": "origin-message-1",
+            }
+        )
+
+        task_id = manager.start_background(
+            "Investigate later.",
+            request_context=request_context,
+        )
+
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+        self.assertEqual(len(manager.running_tasks), 1)
+        source = manager.running_tasks[0]
+        self.assertEqual(source.task_id, task_id)
+        self.assertEqual(source.parent_session_key, request_context.session_key)
+        self.assertEqual(source.channel, request_context.channel)
+        self.assertEqual(source.chat_id, request_context.chat_id)
+        self.assertEqual(source.sender_id, request_context.sender_id)
+        self.assertEqual(source.metadata, request_context.metadata)
+
+        runner.release.set()
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+        await asyncio.sleep(0)
+
+        self.assertEqual(inbound.channel, request_context.channel)
+        self.assertEqual(inbound.chat_id, request_context.chat_id)
+        self.assertEqual(inbound.sender_id, request_context.sender_id)
+        self.assertEqual(inbound.session_id, request_context.session_key)
+        self.assertIn("Child result.", inbound.content)
+        self.assertEqual(
+            inbound.metadata,
+            {
+                "qq_chat_type": "c2c",
+                "message_id": "origin-message-1",
+                "source": "subagent",
+                "task_id": task_id,
+                "parent_session_key": request_context.session_key,
+                "subagent_status": "completed",
+            },
+        )
+        self.assertEqual(manager.running_tasks, ())
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(bus.consume_inbound(), timeout=0.01)
+
+    async def test_background_task_failure_publishes_a_clear_internal_message(self) -> None:
+        bus = MessageBus()
+        manager = self._manager(FailingRunner(), message_bus=bus)
+        request_context = _request_context()
+
+        task_id = manager.start_background("Fail safely.", request_context=request_context)
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+
+        self.assertEqual(inbound.sender_id, request_context.sender_id)
+        self.assertIn("could not complete", inbound.content)
+        self.assertEqual(inbound.metadata["task_id"], task_id)
+        self.assertEqual(inbound.metadata["subagent_status"], "failed")
+
+    async def test_close_cancels_background_tasks_without_publishing_a_result(self) -> None:
+        bus = MessageBus()
+        runner = BlockingRunner(_agent_result("unused"))
+        manager = self._manager(runner, message_bus=bus)
+
+        manager.start_background("Wait forever.", request_context=_request_context())
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+        await manager.close()
+        await manager.close()
+
+        self.assertTrue(runner.cancelled.is_set())
+        self.assertEqual(manager.running_tasks, ())
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(bus.consume_inbound(), timeout=0.01)
+
     def _manager(
         self,
         runner: AgentRunner,
         provider: LLMProvider | None = None,
+        message_bus: MessageBus | None = None,
     ) -> SubagentManager:
         return SubagentManager(
             runner,
             provider or self._provider,
             self._context_builder,
             self._tool_context,
+            message_bus=message_bus,
         )
 
 
@@ -246,7 +346,7 @@ def _agent_result(content: str) -> AgentRunResult:
     )
 
 
-def _request_context():
+def _request_context(metadata: dict[str, str] | None = None):
     from nanobot.tools import RequestContext
 
     return RequestContext(
@@ -254,4 +354,5 @@ def _request_context():
         channel="fake",
         chat_id="chat-1",
         sender_id="sender-1",
+        metadata=metadata or {},
     )

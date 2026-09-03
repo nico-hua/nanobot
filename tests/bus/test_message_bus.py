@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable, Sequence
 
 from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
-from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
+from nanobot.providers import BaseMessage, HumanMessage, LLMProvider, LLMResponse
 from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolRegistry
 
@@ -39,6 +39,14 @@ class ScriptedProvider(LLMProvider):
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         raise AssertionError("MessageBus tests must not use streaming")
+
+
+class ClosingSubagentManager:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class MessageBusTest(unittest.IsolatedAsyncioTestCase):
@@ -141,6 +149,58 @@ class AgentLoopBusTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)
 
         await _cancel_worker(self, worker)
+
+    async def test_processes_a_subagent_result_as_a_new_internal_turn(self) -> None:
+        bus = MessageBus()
+        provider = ScriptedProvider((LLMResponse(content="Delivered result."),))
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
+        inbound = InboundMessage(
+            "test",
+            "chat-1",
+            "sender-1",
+            "parent-session",
+            "A background subagent task has completed.\n\nChild result.",
+            metadata={
+                "source": "subagent",
+                "task_id": "task-1",
+                "parent_session_key": "parent-session",
+            },
+        )
+
+        await bus.publish_inbound(inbound)
+        worker = asyncio.create_task(loop.run())
+        outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        await _cancel_worker(self, worker)
+
+        self.assertEqual(outbound.channel, "test")
+        self.assertEqual(outbound.chat_id, "chat-1")
+        self.assertEqual(outbound.sender_id, "sender-1")
+        self.assertEqual(outbound.session_id, "parent-session")
+        self.assertEqual(outbound.content, "Delivered result.")
+        self.assertEqual(outbound.metadata, inbound.metadata)
+        self.assertEqual(provider.complete_calls[0][-1], HumanMessage(content=inbound.content))
+
+    async def test_close_also_closes_the_subagent_manager(self) -> None:
+        manager = ClosingSubagentManager()
+        loop = AgentLoop(
+            AgentRunner(),
+            ScriptedProvider(()),
+            ToolRegistry(),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            subagent_manager=manager,
+        )
+
+        await loop.close()
+
+        self.assertTrue(manager.closed)
 
 
 async def _cancel_worker(
