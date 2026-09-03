@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
@@ -43,8 +44,12 @@ class FakeProvider(LLMProvider):
 
 
 class NoopToolLoader(ToolLoader):
+    def __init__(self) -> None:
+        self.contexts: list[ToolContext] = []
+
     def load(self, registry: ToolRegistry, context: ToolContext) -> tuple[str, ...]:
-        del registry, context
+        del registry
+        self.contexts.append(context)
         return ()
 
 
@@ -202,6 +207,16 @@ class RecordingCronService(CronService):
 
 
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self._workspace = Path(self._temporary_directory.name) / "workspace"
+
+    def tearDown(self) -> None:
+        self._temporary_directory.cleanup()
+
+    def _config(self) -> NanobotConfig:
+        return _config(self._workspace)
+
     async def test_manages_cron_service_lifecycle(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
@@ -215,6 +230,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         app, manager = _fake_application(
             events,
             loop,
+            workspace=self._workspace,
             cron_service_factory=cron_service_factory,
         )
         cron_service = cron_services[0]
@@ -270,7 +286,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             return _configure_loop(loop, bus)
 
         app = Application(
-            _config(),
+            self._config(),
             provider_factory=lambda config: FakeProvider(),
             channel_factory=channel_factory,
             mcp_provider_factory=mcp_factory,
@@ -306,6 +322,27 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(app.agent_task)
         self.assertTrue(agent_task.cancelled() if agent_task is not None else False)
 
+    async def test_injects_application_subagent_manager_into_tool_context(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        tool_loader = NoopToolLoader()
+        app = Application(
+            self._config(),
+            provider_factory=lambda config: FakeProvider(),
+            channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
+            mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
+                registry,
+                servers,
+                events,
+            ),
+            tool_loader=tool_loader,
+            agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus: _configure_loop(loop, bus),
+        )
+
+        self.assertEqual(len(tool_loader.contexts), 2)
+        self.assertIsNone(tool_loader.contexts[0].subagent_manager)
+        self.assertIs(tool_loader.contexts[1].subagent_manager, app.subagent_manager)
+
     async def test_start_failure_closes_started_resources(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
@@ -319,7 +356,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             return FailingChannel(name, message_bus, events)
 
         app = Application(
-            _config(),
+            self._config(),
             provider_factory=lambda config: FakeProvider(),
             channel_factory=channel_factory,
             mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
@@ -349,7 +386,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         events: list[str] = []
         loop = RecordingLoop(events)
         app = Application(
-            _config(),
+            self._config(),
             provider_factory=lambda config: FakeProvider(),
             channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
             mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
@@ -374,7 +411,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_start_returns_while_the_background_tasks_keep_running(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
-        app, manager = _fake_application(events, loop)
+        app, manager = _fake_application(events, loop, workspace=self._workspace)
 
         await asyncio.wait_for(app.start(), timeout=0.1)
         await asyncio.wait_for(loop.started.wait(), timeout=0.1)
@@ -388,7 +425,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_agent_loop_failure_stops_the_application(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
-        app, manager = _fake_application(events, loop)
+        app, manager = _fake_application(events, loop, workspace=self._workspace)
 
         run_task = asyncio.create_task(app.run())
         await asyncio.wait_for(loop.started.wait(), timeout=1)
@@ -407,7 +444,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_channel_manager_failure_stops_the_application(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
-        app, manager = _fake_application(events, loop)
+        app, manager = _fake_application(events, loop, workspace=self._workspace)
 
         run_task = asyncio.create_task(app.run())
         await asyncio.wait_for(loop.started.wait(), timeout=1)
@@ -425,7 +462,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_unexpected_agent_loop_completion_stops_the_application(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
-        app, manager = _fake_application(events, loop)
+        app, manager = _fake_application(events, loop, workspace=self._workspace)
 
         run_task = asyncio.create_task(app.run())
         await asyncio.wait_for(loop.started.wait(), timeout=1)
@@ -446,6 +483,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         app, manager = _fake_application(
             events,
             loop,
+            workspace=self._workspace,
             manager_start_error=RuntimeError("channel manager unavailable"),
         )
 
@@ -462,7 +500,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     async def test_cancelling_run_closes_all_resources(self) -> None:
         events: list[str] = []
         loop = RecordingLoop(events)
-        app, manager = _fake_application(events, loop)
+        app, manager = _fake_application(events, loop, workspace=self._workspace)
 
         run_task = asyncio.create_task(app.run())
         await asyncio.wait_for(loop.started.wait(), timeout=1)
@@ -479,7 +517,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.stop_calls, 1)
 
 
-def _config() -> NanobotConfig:
+def _config(workspace: Path) -> NanobotConfig:
     return NanobotConfig(
         provider=ProviderConfig(
             type="openai_compat",
@@ -487,7 +525,7 @@ def _config() -> NanobotConfig:
             api_base="https://example.test/v1",
             default_model="test-model",
         ),
-        workspace=Path("workspace"),
+        workspace=workspace,
         default_channel="fake",
         mcp_servers={"fake": MCPServerConfig(command="python")},
     )
@@ -502,6 +540,7 @@ def _fake_application(
     events: list[str],
     loop: RecordingLoop,
     *,
+    workspace: Path,
     manager_start_error: Exception | None = None,
     cron_service_factory: Callable[[CronCallback, Path], CronService] | None = None,
 ) -> tuple[Application, FakeChannelManager]:
@@ -529,7 +568,7 @@ def _fake_application(
         return manager
 
     app = Application(
-        _config(),
+        _config(workspace),
         provider_factory=lambda config: FakeProvider(),
         channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
         mcp_provider_factory=lambda registry, servers: FakeMCPProvider(

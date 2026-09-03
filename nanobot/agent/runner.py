@@ -31,6 +31,7 @@ class AgentRunSpec:
     provider: LLMProvider
     tool_registry: ToolRegistry
     max_iterations: int = 30
+    blocked_tool_names: Sequence[str] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.messages, Sequence) or not all(
@@ -48,8 +49,19 @@ class AgentRunSpec:
             raise TypeError("max_iterations must be an integer")
         if self.max_iterations <= 0:
             raise ValueError("max_iterations must be positive")
+        if isinstance(self.blocked_tool_names, (str, bytes)) or not isinstance(
+            self.blocked_tool_names,
+            Sequence,
+        ):
+            raise TypeError("blocked_tool_names must be a sequence of strings")
+        if any(
+            not isinstance(name, str) or not name.strip()
+            for name in self.blocked_tool_names
+        ):
+            raise ValueError("blocked_tool_names must not contain blank names")
 
         object.__setattr__(self, "messages", tuple(self.messages))
+        object.__setattr__(self, "blocked_tool_names", tuple(self.blocked_tool_names))
 
 
 @dataclass(frozen=True)
@@ -72,17 +84,23 @@ class AgentRunner:
         conversation = list(spec.messages)
         tools_used: list[ToolCallRequest] = []
         token_usage: TokenUsage | None = None
+        blocked_tool_names = set(spec.blocked_tool_names)
+        tools = tuple(
+            tool
+            for tool in spec.tool_registry.tools
+            if tool.name not in blocked_tool_names
+        )
         logger.info(
             "Agent run started (messages=%d, tools=%d, max_iterations=%d)",
             len(conversation),
-            len(spec.tool_registry.tools),
+            len(tools),
             spec.max_iterations,
         )
         for iteration in range(spec.max_iterations):
             logger.debug("Requesting provider completion (iteration=%d)", iteration + 1)
             response = await spec.provider.complete(
                 conversation,
-                tools=spec.tool_registry.tools or None,
+                tools=tools or None,
             )
             token_usage = _combine_token_usage(token_usage, response.usage)
             if not response.tool_calls:
@@ -109,6 +127,18 @@ class AgentRunner:
             )
             tools_used.extend(response.tool_calls)
             for tool_call in response.tool_calls:
+                if tool_call.name in blocked_tool_names:
+                    logger.warning("Blocked requested tool (name=%s)", tool_call.name)
+                    conversation.append(
+                        ToolMessage(
+                            content=(
+                                "Error: Tool is not available in this agent run: "
+                                f"{tool_call.name}"
+                            ),
+                            tool_call_id=tool_call.id,
+                        )
+                    )
+                    continue
                 logger.info("Executing requested tool (name=%s)", tool_call.name)
                 result = await spec.tool_registry.execute(
                     tool_call.name,

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..cron import CronService
+    from ..subagent import SubagentManager
 
 
 _CURRENT_REQUEST_CONTEXT: ContextVar[RequestContext | None] = ContextVar(
@@ -31,6 +32,7 @@ class ToolContext:
     workspace: str | Path | None = None
     cron_service: CronService | None = None
     cron_timezone: str = "Asia/Shanghai"
+    subagent_manager: SubagentManager | None = None
 
 
 @dataclass(frozen=True)

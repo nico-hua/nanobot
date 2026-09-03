@@ -231,6 +231,36 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_hides_and_rejects_a_blocked_tool(self) -> None:
+        request = tool_call("blocked-1", "spawn", value="task")
+        provider = ScriptedProvider(
+            (
+                LLMResponse(tool_calls=(request,)),
+                LLMResponse(content="The tool is unavailable."),
+            )
+        )
+        tool = RecordingTool(name="spawn")
+
+        result = await AgentRunner().run(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Create a subagent."),),
+                provider=provider,
+                tool_registry=ToolRegistry((tool,)),
+                blocked_tool_names=("spawn",),
+            )
+        )
+
+        self.assertEqual(result.content, "The tool is unavailable.")
+        self.assertEqual(provider.complete_calls[0][1], None)
+        self.assertEqual(tool.calls, [])
+        self.assertEqual(
+            provider.complete_calls[1][0][-1],
+            ToolMessage(
+                content="Error: Tool is not available in this agent run: spawn",
+                tool_call_id="blocked-1",
+            ),
+        )
+
     async def test_returns_a_tool_execution_error_to_the_model(self) -> None:
         provider = ScriptedProvider(
             (

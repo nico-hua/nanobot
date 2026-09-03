@@ -28,6 +28,18 @@ _CONTEXT_FILES = (
     ("SOUL.md", "## Agent Style"),
     ("USER.md", "## User Profile"),
 )
+_SUBAGENT_SYSTEM_PROMPT_TEMPLATE = """# Subagent
+
+You are a subagent spawned by the main agent to complete a specific task.
+Stay focused on the assigned task. Your final response will be reported back to the main agent.
+
+## Workspace
+
+Current project workspace: {workspace}
+
+## Skills
+
+{skills_summary}"""
 
 
 class ContextWindowExceededError(RuntimeError):
@@ -78,6 +90,14 @@ class ContextBuilder:
             sections.append(f"## Long-term Memory\n\n{memory}")
         sections.extend(self._build_skill_sections())
         return "\n\n".join(sections)
+
+    def build_subagent_system_prompt(self) -> str:
+        """Build the isolated system prompt used for one subagent task."""
+
+        return _SUBAGENT_SYSTEM_PROMPT_TEMPLATE.format(
+            workspace=self._workspace,
+            skills_summary="\n\n".join(self._build_skill_sections()),
+        )
 
     def build_request_messages(
         self,

@@ -151,6 +151,34 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertNotIn("## Always-active Skills", prompt)
         self.assertNotIn("## Available Skills", prompt)
 
+    def test_builds_subagent_prompt_with_workspace_skill_paths(self) -> None:
+        self._write_skill(
+            "alpha",
+            "---\nname: alpha\nalways: true\n---\nAlpha instructions.\n",
+        )
+        self._write_skill(
+            "beta",
+            "---\nname: beta\ndescription: Beta help.\n---\nBeta instructions stay in the file.\n",
+        )
+
+        prompt = ContextBuilder(self._workspace).build_subagent_system_prompt()
+
+        self.assertIn("# Subagent", prompt)
+        self.assertIn("Current project workspace: ", prompt)
+        self.assertIn(str(self._workspace.resolve()), prompt)
+        self.assertIn("## Always-active Skills", prompt)
+        self.assertIn("Alpha instructions.", prompt)
+        self.assertIn("## Available Skills", prompt)
+        self.assertIn("**beta**: Beta help.", prompt)
+        self.assertNotIn("Beta instructions stay in the file.", prompt)
+
+    def test_builds_subagent_prompt_without_skills(self) -> None:
+        prompt = ContextBuilder(self._workspace).build_subagent_system_prompt()
+
+        self.assertIn("## Skills", prompt)
+        self.assertNotIn("## Always-active Skills", prompt)
+        self.assertNotIn("## Available Skills", prompt)
+
     def test_reloads_always_skill_content_for_each_system_prompt(self) -> None:
         path = self._write_skill(
             "always",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from ..mcp import MCPProvider
 from ..memory import MemoryConsolidator, MemoryStore
 from ..providers import LLMProvider, create_default_provider_factory
 from ..session import SessionCompactor, SessionManager
+from ..subagent import SubagentManager
 from ..tools import ToolContext, ToolLoader, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -71,21 +73,34 @@ class Application:
         self._cron_service = cron_service_factory(self._cron_publisher.publish, config.workspace)
         self._tool_registry = ToolRegistry()
         self._tool_loader = tool_loader if tool_loader is not None else ToolLoader()
-        self._tool_loader.load(
-            self._tool_registry,
-            ToolContext(
-                workspace=config.workspace,
-                cron_service=self._cron_service,
-                cron_timezone=config.cron_timezone,
-            ),
-        )
         self._provider = provider_factory(config.provider)
-        self._session_manager = SessionManager(config.workspace)
         self._context_builder = ContextBuilder(
             config.workspace,
             config.context_window_tokens,
             config.provider.default_max_tokens,
         )
+        # The subagent context intentionally has no manager, so a future
+        # SpawnTool can require that dependency and remain unavailable here.
+        subagent_tool_context = ToolContext(
+            workspace=config.workspace,
+            cron_service=self._cron_service,
+            cron_timezone=config.cron_timezone,
+        )
+        self._subagent_manager = SubagentManager(
+            AgentRunner(),
+            self._provider,
+            self._context_builder,
+            subagent_tool_context,
+            self._tool_loader,
+        )
+        self._tool_loader.load(
+            self._tool_registry,
+            replace(
+                subagent_tool_context,
+                subagent_manager=self._subagent_manager,
+            ),
+        )
+        self._session_manager = SessionManager(config.workspace)
         self._session_compactor = SessionCompactor(
             self._provider,
             token_threshold=config.compaction_threshold_tokens,
@@ -167,6 +182,12 @@ class Application:
         """Return the callback that routes due Cron tasks through the MessageBus."""
 
         return self._cron_publisher
+
+    @property
+    def subagent_manager(self) -> SubagentManager:
+        """Return the manager used by subagent-capable tools."""
+
+        return self._subagent_manager
 
     @property
     def agent_task(self) -> asyncio.Task[None] | None:

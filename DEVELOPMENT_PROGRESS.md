@@ -1,5 +1,17 @@
 # 项目开发进度
 
+## 最新 Subagent 第一期与测试工作区隔离（2026-09-03）
+
+- [x] 新增 `nanobot/subagent/`：`SubagentManager` 为单次子任务构建隔离执行环境，只向 `AgentRunner` 传入专用 system prompt 与任务消息，不继承主 Agent 的会话历史、不写入主 Session，也不访问 `MessageBus` 或 Channel。
+- [x] `ContextBuilder` 新增 `build_subagent_system_prompt()`，使用明确的 Subagent 身份、workspace 路径与当前 Skill 区块构建提示词；Skill 内容复用现有 `_build_skill_sections()` 规则，always-active Skill 注入完整正文，其他 Skill 仅提供摘要，且每次请求重新读取。
+- [x] 子 Agent 使用自身的 `ToolRegistry`，由 `ToolLoader` 使用不含 `subagent_manager` 的基础 `ToolContext` 加载；主 Agent 在加载工具时才注入 `SubagentManager`。这为后续 `SpawnTool` 保留了清晰边界：它可要求 `context.subagent_manager`，从而不会注册到子 Agent。
+- [x] `SubagentManager` 持有运行时 Provider，`run()` 仅接收任务文本；正常 Agent 仍可通过 `AgentRunSpec.blocked_tool_names` 隐藏并拒绝指定工具调用。
+- [x] `Application` 负责组装 Provider、`ContextBuilder`、独立的 Subagent 工具环境和主工具环境；`ToolContext` 新增可选 `subagent_manager`，供后续工具工厂使用。
+- [x] `tests/cli/test_application.py` 不再使用项目根目录相对的 `workspace/`；每个 Application 测试使用并清理独立临时工作区，避免产生本地运行产物。
+- [x] 最近一次全量离线测试：`326 passed, 7 skipped`。真实 Provider/QQ live tests 保持默认跳过。
+
+本阶段仍不实现：`SpawnTool`、子 Agent 后台任务/状态查询/取消/并发限制、子 Agent Session 持久化、主子 Agent 消息总线回传，以及 MCP 工具向子 Agent 的动态同步。
+
 ## 最新 CronTool、请求上下文与记忆队列批处理（2026-09-02）
 
 - [x] 新增 `cron_timezone` 配置（默认 `Asia/Shanghai`），在配置加载阶段校验 IANA 时区，并由 `Application` 通过 `ToolContext` 注入 `CronService` 与时区。
