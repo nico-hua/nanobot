@@ -56,6 +56,13 @@
 - [x] 最近一次全量离线测试：`340 passed, 7 skipped`。真实 Provider/QQ live tests 默认跳过；设置 `NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS=1` 且提供本地凭据后才会访问真实服务。
 - [x] 离线测试目录为 `tests/`；完整测试命令为 `python -B -m unittest discover -s tests -t . -p "test*.py"`。
 
+### 2026-09-04
+
+- [x] 完善后台 `SubagentManager` 生命周期：任务记录保留在内存中，支持 `pending`、`running`、`completed`、`failed`、`cancelled` 与 `timeout` 状态，并保存任务描述、所属 session、路由信息、创建/结束时间、错误和结果摘要。任务只会进入一次终态，成功、失败和超时结果最多通过 `MessageBus` 回传一次；取消后不会再发布成功结果。
+- [x] 为后台子任务增加默认运行时策略：最多并发 4 个任务、默认超时 300 秒；支持按任务 ID 查询、按 session 列出、按 session 取消，以及 AgentLoop 关闭时统一取消和等待已有任务。同步 `SpawnTool(wait=true)` 保持原有行为。
+- [x] `CommandRouter` 新增 `/subagents`、`/subagents status <task_id>` 和 `/subagents cancel <task_id>`。命令只处理当前 session 的内存任务，不进入 LLM、Session 普通消息或记忆事件队列；无法访问其他会话任务，终态任务不能再次取消。
+- [x] 新增 `COMMANDS.md`，集中说明应用启动参数和当前聊天渠道的斜杠命令。最近一次完整离线测试为 `346 passed, 7 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具
@@ -90,7 +97,7 @@
 - Provider 的超时、重试、代理、模型能力声明、可选 SDK 依赖和成本控制仍需统一。
 - Session JSONL 尚无跨进程锁、损坏恢复、迁移、TTL 或缓存淘汰；摘要、记忆仍缺少多级压缩、自动重试、冲突解决和后台任务恢复。
 - Cron 缺少 cron 表达式、编辑/启停、限长批处理、事件归档、可靠投递、重试及分布式调度。
-- Subagent 后台模式尚无任务状态查询、取消工具、持久化、超时、重试、并发限制、结果实时注入或多 Agent 协作。
+- Subagent 后台任务尚无持久化、进程重启恢复、自动重试、结果在原始 tool call 中实时注入、LLM 可调用的任务管理工具或多 Agent 协作。
 - `ExecTool` 不是安全沙箱；仍需要操作系统级 sandbox 来限制文件、网络、系统调用与进程权限。
 - QQ 之外的 Channel、消息重试、可靠投递、总线持久化、优先级、结构化日志、指标、追踪和外部日志后端尚未实现。
 

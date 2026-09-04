@@ -6,10 +6,14 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..bus import InboundMessage, OutboundMessage
 from ..memory import MemoryStore
 from ..session import Session, SessionCompactor, SessionManager
+
+if TYPE_CHECKING:
+    from ..subagent import BackgroundSubagentTask, SubagentManager
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,7 @@ class CommandContext:
     session_manager: SessionManager
     session_compactor: SessionCompactor | None
     memory_store: MemoryStore | None
+    subagent_manager: SubagentManager | None
     cancel_active_turn: Callable[[], bool]
 
 
@@ -57,6 +62,7 @@ class CommandRouter:
         *,
         session_compactor: SessionCompactor | None = None,
         memory_store: MemoryStore | None = None,
+        subagent_manager: SubagentManager | None = None,
         memory_output_limit: int = DEFAULT_MEMORY_OUTPUT_LIMIT,
         cancel_active_turn: Callable[[str], bool] | None = None,
     ) -> None:
@@ -80,6 +86,7 @@ class CommandRouter:
         self._session_manager = session_manager
         self._session_compactor = session_compactor
         self._memory_store = memory_store
+        self._subagent_manager = subagent_manager
         self._memory_output_limit = memory_output_limit
         self._cancel_active_turn = cancel_active_turn or (lambda _session_key: False)
         self._commands: dict[str, _RegisteredCommand] = {}
@@ -88,6 +95,13 @@ class CommandRouter:
         self.register("help", "显示可用命令。", self._handle_help)
         self.register("compact", "整理当前会话的较早历史摘要。", self._handle_compact)
         self.register("memory", "查看当前 workspace 的长期记忆。", self._handle_memory)
+        if subagent_manager is not None:
+            self.register(
+                "subagents",
+                "查看、查询或取消当前会话的后台子 Agent 任务。",
+                self._handle_subagents,
+                accepts_arguments=True,
+            )
 
     @property
     def command_names(self) -> tuple[str, ...]:
@@ -183,6 +197,7 @@ class CommandRouter:
             session_manager=self._session_manager,
             session_compactor=self._session_compactor,
             memory_store=self._memory_store,
+            subagent_manager=self._subagent_manager,
             cancel_active_turn=lambda: self._cancel_active_turn(session_key),
         )
         try:
@@ -232,6 +247,34 @@ class CommandRouter:
             content = f"{content[:self._memory_output_limit]}\n\n（内容已截断）"
         return content
 
+    async def _handle_subagents(self, context: CommandContext) -> str:
+        """List, inspect, or cancel background tasks owned by this session."""
+
+        manager = context.subagent_manager
+        if manager is None:
+            return "当前未启用后台子 Agent。"
+        arguments = context.command.arguments
+        if not arguments:
+            tasks = manager.list_tasks(context.session_key)
+            if not tasks:
+                return "当前会话没有后台子 Agent 任务。"
+            return "\n".join(_format_subagent_task(task) for task in tasks)
+
+        action = arguments[0].lower()
+        if action not in {"status", "cancel"} or len(arguments) != 2:
+            return "用法：/subagents、/subagents status <task_id> 或 /subagents cancel <task_id>。"
+
+        task = manager.get_task(arguments[1])
+        if task is None or task.parent_session_key != context.session_key:
+            return "未找到当前会话的子 Agent 任务。"
+        if action == "status":
+            return _format_subagent_task(task, include_result=True)
+        if task.is_final:
+            return f"任务 {task.task_id} 已处于 {task.status} 状态，不能再次取消。"
+        if not manager.cancel_background(task.task_id, session_key=context.session_key):
+            return "子 Agent 任务无法取消，请稍后重试。"
+        return f"已请求取消子 Agent 任务 {task.task_id}。"
+
     def _help_text(self) -> str:
         lines = ["可用命令："]
         lines.extend(
@@ -265,3 +308,18 @@ def _require_session(context: CommandContext) -> Session:
     if context.session is None:
         raise RuntimeError("Command requires a session")
     return context.session
+
+
+def _format_subagent_task(
+    task: BackgroundSubagentTask,
+    *,
+    include_result: bool = False,
+) -> str:
+    """Format the small task record shown by the command router."""
+
+    detail = task.task
+    if include_result and task.result_summary:
+        detail = task.result_summary
+    elif include_result and task.error:
+        detail = task.error
+    return f"- {task.task_id} · {task.status} · {detail}"
