@@ -62,6 +62,8 @@
 - [x] 为后台子任务增加默认运行时策略：最多并发 4 个任务、默认超时 300 秒；支持按任务 ID 查询、按 session 列出、按 session 取消，以及 AgentLoop 关闭时统一取消和等待已有任务。同步 `SpawnTool(wait=true)` 保持原有行为。
 - [x] `CommandRouter` 新增 `/subagents`、`/subagents status <task_id>` 和 `/subagents cancel <task_id>`。命令只处理当前 session 的内存任务，不进入 LLM、Session 普通消息或记忆事件队列；无法访问其他会话任务，终态任务不能再次取消。
 - [x] 新增 `COMMANDS.md`，集中说明应用启动参数和当前聊天渠道的斜杠命令。最近一次完整离线测试为 `346 passed, 7 skipped`。
+- [x] 增加 Session 独立 `goal_state`：`GoalState` 持久化 active、completed、cancelled、failed 状态、目标与时间边界，不使用通用 Session metadata。`/goal <objective>` 会保存或替换终态目标；已有 active goal 时不覆盖。
+- [x] `/goal` 保存成功后向共享 `MessageBus` 发布带 `source=goal` 的内部 `InboundMessage`，使用当前 Session 上下文和可用工具启动一次普通 Agent turn。QQ 将 goal 结果作为主动消息发送，不复用旧 `message_id`。自动持续续跑仍留待后续阶段。
 
 ## 待开发功能
 
@@ -85,7 +87,6 @@
 - [ ] `generate_image`。
 - [ ] `list_sessions` / `search_sessions` / `read_session`。
 - [ ] `send_session_message`。
-- [ ] `create_goal` / `update_goal`。
 - [ ] `my`：运行时控制。
 - [ ] `run_cli_app`。
 - [ ] MCP resources、prompts、OAuth、重连、热加载、二进制结果与插件机制。

@@ -94,6 +94,7 @@ class AgentLoop:
             session_compactor=session_compactor,
             memory_store=memory_store,
             subagent_manager=subagent_manager,
+            message_bus=message_bus,
             cancel_active_turn=self._cancel_active_turn,
         )
         # 同一 session 的写入、压缩和命令操作必须按顺序执行。

@@ -11,7 +11,7 @@ from nanobot.agent import AgentLoop, AgentRunner, CommandRouter, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.memory import MemoryConsolidator, MemoryStore
 from nanobot.providers import AIMessage, BaseMessage, HumanMessage, LLMProvider, LLMResponse
-from nanobot.session import Session, SessionCompactor, SessionManager
+from nanobot.session import GoalState, Session, SessionCompactor, SessionManager
 from nanobot.tools import Tool, ToolRegistry
 
 
@@ -89,6 +89,16 @@ class RecordingCompactor(SessionCompactor):
         if not session.messages:
             return session
         return session.with_summary("Compacted session.", len(session.messages))
+
+
+class RecordingMessageBus(MessageBus):
+    def __init__(self) -> None:
+        super().__init__()
+        self.inbound_messages: list[InboundMessage] = []
+
+    async def publish_inbound(self, message: InboundMessage) -> None:
+        self.inbound_messages.append(message)
+        await super().publish_inbound(message)
 
 
 class CommandRouterTest(unittest.IsolatedAsyncioTestCase):
@@ -193,6 +203,120 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(invalid_result, OutboundMessage)
         self.assertEqual(provider.complete_calls, [])
         self.assertEqual(self._sessions.get_or_create("session-1").messages, ())
+
+    async def test_goal_creates_persists_and_publishes_an_active_goal(self) -> None:
+        previous = self._sessions.get_or_create("session-1").with_messages(
+            (HumanMessage(content="Earlier question."),)
+        )
+        self._sessions.save(previous)
+        bus = RecordingMessageBus()
+        provider = ScriptedProvider(())
+        loop = self._loop(provider, message_bus=bus)
+
+        result = await _dispatch(
+            loop,
+            "  /goal   Finish the migration.  ",
+            "test",
+            "chat-1",
+            "session-1",
+        )
+
+        restored = SessionManager(self._temporary_directory.name).get_or_create("session-1")
+        self.assertIn("已创建目标", result.content)
+        self.assertIn("已开始执行目标", result.content)
+        self.assertIsNotNone(restored.goal_state)
+        self.assertEqual(restored.goal_state.status, "active")
+        self.assertEqual(restored.goal_state.objective, "Finish the migration.")
+        self.assertEqual(restored.messages, previous.messages)
+        self.assertEqual(len(bus.inbound_messages), 1)
+        progress_message = bus.inbound_messages[0]
+        self.assertEqual(progress_message.channel, "test")
+        self.assertEqual(progress_message.chat_id, "chat-1")
+        self.assertEqual(progress_message.sender_id, "test-sender")
+        self.assertEqual(progress_message.session_id, "session-1")
+        self.assertEqual(progress_message.metadata, {"source": "goal"})
+        self.assertEqual(
+            progress_message.content,
+            "Start working on the current sustained goal.\n\n"
+            "Goal:\n"
+            "Finish the migration.\n\n"
+            "Begin from the context saved in the current Session and use the available "
+            "tools to make steady progress toward the goal.",
+        )
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_rejects_an_empty_objective(self) -> None:
+        provider = ScriptedProvider(())
+        loop = self._loop(provider)
+
+        result = await _dispatch(loop, "/goal   ", "test", "chat-1", "session-1")
+
+        self.assertEqual(result.content, "用法：/goal <目标描述>")
+        self.assertIsNone(self._sessions.get_or_create("session-1").goal_state)
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_progress_message_uses_the_saved_session_context(self) -> None:
+        previous = self._sessions.get_or_create("session-1").with_messages(
+            (
+                HumanMessage(content="Earlier question."),
+                AIMessage(content="Earlier answer."),
+            )
+        )
+        self._sessions.save(previous)
+        bus = RecordingMessageBus()
+        provider = ScriptedProvider((LLMResponse(content="Goal progress."),))
+        loop = self._loop(provider, message_bus=bus)
+
+        await _dispatch(loop, "/goal Finish the migration.", "test", "chat-1", "session-1")
+        progress_message = await bus.consume_inbound()
+        result = await loop._dispatch_non_stop_message(progress_message, None)
+
+        request_messages = provider.complete_calls[0]
+        self.assertIn(previous.messages[0], request_messages)
+        self.assertIn(previous.messages[1], request_messages)
+        self.assertEqual(
+            request_messages[-1],
+            HumanMessage(content=progress_message.content),
+        )
+        self.assertEqual(result.content, "Goal progress.")
+        self.assertEqual(result.metadata["source"], "goal")
+
+    async def test_goal_does_not_replace_an_active_goal(self) -> None:
+        active_goal = GoalState.create("Keep the current objective.")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(active_goal)
+        )
+        provider = ScriptedProvider(())
+        loop = self._loop(provider)
+
+        result = await _dispatch(
+            loop,
+            "/goal Replace it.",
+            "test",
+            "chat-1",
+            "session-1",
+        )
+
+        restored = self._sessions.get_or_create("session-1")
+        self.assertIn("已有进行中的目标", result.content)
+        self.assertEqual(restored.goal_state, active_goal)
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_replaces_a_terminal_goal(self) -> None:
+        terminal_goal = GoalState.create("Old objective.").finish("failed")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(terminal_goal)
+        )
+        provider = ScriptedProvider(())
+        loop = self._loop(provider)
+
+        await _dispatch(loop, "/goal New objective.", "test", "chat-1", "session-1")
+
+        restored = self._sessions.get_or_create("session-1")
+        self.assertIsNotNone(restored.goal_state)
+        self.assertEqual(restored.goal_state.status, "active")
+        self.assertEqual(restored.goal_state.objective, "New objective.")
+        self.assertEqual(provider.complete_calls, [])
 
     async def test_compact_uses_the_existing_session_compactor(self) -> None:
         provider = ScriptedProvider(())

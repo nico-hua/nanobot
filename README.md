@@ -11,6 +11,7 @@
 - 最小 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
 - QQ 文本 Channel、ChannelManager、Application 生命周期与 `python -m nanobot` CLI 入口。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。
+- Session 级持续目标：`GoalState` 独立持久化；`/goal <objective>` 保存目标后，会在同一 session 中启动一次基于当前上下文的 Agent turn。
 - 长期记忆：`MEMORY.md` 读取、LLM 整理，以及由 `history.jsonl` 和 `.memory_cursor` 驱动的可恢复后台事件队列。
 - workspace Skills：静态 Skill 发现、always-active 指令、`$skill-name` 当前请求激活和环境依赖可用性检查。
 

@@ -19,6 +19,7 @@ from ..providers import (
     ToolCallRequest,
     ToolMessage,
 )
+from .goals import GoalState
 from .models import Session, _validate_session_key
 
 
@@ -95,15 +96,16 @@ class JsonlSessionStorage:
         if not records or records[0].get("type") != "session":
             raise ValueError(f"Invalid session file: {path.name}")
 
-        metadata = records[0]
+        header = records[0]
         messages = tuple(_message_from_record(record) for record in records[1:])
         return Session(
-            key=_required_text(metadata, "key"),
-            created_at=_timestamp_from_record(metadata, "created_at"),
-            updated_at=_timestamp_from_record(metadata, "updated_at"),
+            key=_required_text(header, "key"),
+            created_at=_timestamp_from_record(header, "created_at"),
+            updated_at=_timestamp_from_record(header, "updated_at"),
             messages=messages,
-            summary=_optional_summary(metadata),
-            summary_until=_optional_summary_until(metadata),
+            summary=_optional_summary(header),
+            summary_until=_optional_summary_until(header),
+            goal_state=_optional_goal_state(header),
         )
 
 
@@ -116,6 +118,11 @@ def _serialize_session(session: Session) -> str:
             "updated_at": session.updated_at.isoformat(),
             "summary": session.summary,
             "summary_until": session.summary_until,
+            "goal_state": (
+                session.goal_state.to_dict()
+                if session.goal_state is not None
+                else None
+            ),
         },
         *(_message_to_record(message) for message in session.messages),
     ]
@@ -125,7 +132,7 @@ def _serialize_session(session: Session) -> str:
             for record in records
         )
     except (TypeError, ValueError) as exc:
-        raise TypeError("session messages must be JSON serializable") from exc
+        raise TypeError("session data must be JSON serializable") from exc
 
 
 def _message_to_record(message: BaseMessage) -> dict[str, Any]:
@@ -233,6 +240,15 @@ def _optional_summary_until(record: Mapping[str, Any]) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise TypeError("Session record summary_until must be an integer")
     return value
+
+
+def _optional_goal_state(record: Mapping[str, Any]) -> GoalState | None:
+    value = record.get("goal_state")
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("Session record goal_state must be an object or null")
+    return GoalState.from_dict(value)
 
 
 def _timestamp_from_record(record: Mapping[str, Any], name: str) -> datetime:

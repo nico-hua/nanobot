@@ -107,6 +107,5 @@ class ToolLoaderTest(unittest.TestCase):
         self.assertEqual(names, ("cron", *self.EXPECTED_TOOL_NAMES))
         self.assertIsInstance(registry.get("cron"), CronTool)
 
-
 async def _no_op(task: object) -> None:
     del task

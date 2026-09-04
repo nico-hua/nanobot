@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from ..providers import BaseMessage
+from .goals import GoalState
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Session:
     messages: tuple[BaseMessage, ...] = ()
     summary: str | None = None
     summary_until: int = 0
+    goal_state: GoalState | None = None
 
     def __post_init__(self) -> None:
         _validate_session_key(self.key)
@@ -40,6 +42,8 @@ class Session:
             raise ValueError("summary_until must reference the session message range")
         if self.summary is None and self.summary_until:
             raise ValueError("summary_until requires a summary")
+        if self.goal_state is not None and not isinstance(self.goal_state, GoalState):
+            raise TypeError("goal_state must be a GoalState or None")
 
     @classmethod
     def create(cls, key: str) -> Session:
@@ -62,6 +66,11 @@ class Session:
         """Return a session with one summary and its covered message boundary."""
 
         return replace(self, summary=summary, summary_until=summary_until)
+
+    def with_goal_state(self, goal_state: GoalState | None) -> Session:
+        """Return a session with its dedicated goal state replaced."""
+
+        return replace(self, goal_state=goal_state)
 
     def reset(self) -> Session:
         """Return the same session identity with all short-term state cleared."""

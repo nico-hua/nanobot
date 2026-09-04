@@ -244,6 +244,40 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_sends_goal_progress_as_an_initiated_message(self) -> None:
+        bus = MessageBus()
+        client = FakeQQClient()
+        channel = _channel(bus, client)
+        await channel.start()
+        await asyncio.sleep(0)
+
+        await channel.send(
+            OutboundMessage(
+                channel="qq",
+                chat_id="user-1",
+                sender_id="sender-1",
+                session_id="qq:user-1",
+                content="Goal progress",
+                metadata={
+                    "source": "goal",
+                    "qq_chat_type": "c2c",
+                    "message_id": "origin-message-1",
+                },
+            )
+        )
+        await channel.stop()
+
+        self.assertEqual(
+            client.api.c2c_calls,
+            [
+                {
+                    "openid": "user-1",
+                    "msg_type": 2,
+                    "markdown": {"content": "Goal progress"},
+                }
+            ],
+        )
+
     async def test_allow_from_rejects_unauthorized_sender(self) -> None:
         bus = MessageBus()
         channel = _channel(

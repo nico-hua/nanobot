@@ -19,12 +19,13 @@ python -m nanobot [--config <path>] [--workspace <path>]
 
 命令会在 Agent 调用模型之前由 `CommandRouter` 处理。命令名称不区分大小写，并会忽略首尾空格；未知或格式错误的 slash command 不会交给 LLM。
 
-除 `/stop` 外，命令会与同一 session 的普通对话串行执行。命令本身不会写入 `Session.messages`，也不会生成长期记忆事件。
+除 `/stop` 外，命令会与同一 session 的普通对话串行执行。命令本身不会写入 `Session.messages`，也不会生成长期记忆事件；`/goal` 在保存目标状态后会额外投递一个内部普通 turn，因此该 turn 会按常规流程写入会话和记忆事件。
 
 | 命令 | 作用 |
 | --- | --- |
 | `/help` | 显示当前已注册命令及简短说明。 |
 | `/new` | 清空当前 session 的短期对话历史和摘要，开始新会话；不会删除 workspace 的长期记忆 `MEMORY.md`，也不会改变 session key。 |
+| `/goal <objective>` | 为当前 session 创建并持久化一个 active goal。已有 active goal 时不会覆盖；已完成、失败或取消的目标可被替换。保存成功后，Agent 会在同一 session 中开始执行目标。 |
 | `/stop` | 请求取消当前 session 正在运行的普通 Agent turn。没有活动 turn 时会明确提示。它不会取消后台 Subagent；请使用 `/subagents cancel`。 |
 | `/compact` | 对当前 session 较早的完整对话轮次执行已有的摘要压缩；没有可压缩内容时只返回提示。 |
 | `/memory` | 只读显示当前 workspace 的长期记忆 `MEMORY.md`。文件为空或不存在时返回提示；内容过长会截断。 |

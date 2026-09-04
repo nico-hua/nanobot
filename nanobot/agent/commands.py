@@ -8,9 +8,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ..bus import InboundMessage, OutboundMessage
+from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryStore
-from ..session import Session, SessionCompactor, SessionManager
+from ..session import GoalState, Session, SessionCompactor, SessionManager
 
 if TYPE_CHECKING:
     from ..subagent import BackgroundSubagentTask, SubagentManager
@@ -18,6 +18,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MEMORY_OUTPUT_LIMIT = 4_000
+_GOAL_START_MESSAGE_TEMPLATE = (
+    "Start working on the current sustained goal.\n\n"
+    "Goal:\n"
+    "{objective}\n\n"
+    "Begin from the context saved in the current Session and use the available "
+    "tools to make steady progress toward the goal."
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +70,7 @@ class CommandRouter:
         session_compactor: SessionCompactor | None = None,
         memory_store: MemoryStore | None = None,
         subagent_manager: SubagentManager | None = None,
+        message_bus: MessageBus | None = None,
         memory_output_limit: int = DEFAULT_MEMORY_OUTPUT_LIMIT,
         cancel_active_turn: Callable[[str], bool] | None = None,
     ) -> None:
@@ -75,6 +83,8 @@ class CommandRouter:
             raise TypeError("session_compactor must be a SessionCompactor or None")
         if memory_store is not None and not isinstance(memory_store, MemoryStore):
             raise TypeError("memory_store must be a MemoryStore or None")
+        if message_bus is not None and not isinstance(message_bus, MessageBus):
+            raise TypeError("message_bus must be a MessageBus or None")
         if not isinstance(memory_output_limit, int) or isinstance(
             memory_output_limit,
             bool,
@@ -87,12 +97,14 @@ class CommandRouter:
         self._session_compactor = session_compactor
         self._memory_store = memory_store
         self._subagent_manager = subagent_manager
+        self._message_bus = message_bus
         self._memory_output_limit = memory_output_limit
         self._cancel_active_turn = cancel_active_turn or (lambda _session_key: False)
         self._commands: dict[str, _RegisteredCommand] = {}
         self.register("new", "清空当前会话的短期历史。", self._handle_new)
         self.register("stop", "停止当前会话正在执行的请求。", self._handle_stop)
         self.register("help", "显示可用命令。", self._handle_help)
+        self.register("goal", "创建当前会话的持续目标。", self._handle_goal, accepts_arguments=True)
         self.register("compact", "整理当前会话的较早历史摘要。", self._handle_compact)
         self.register("memory", "查看当前 workspace 的长期记忆。", self._handle_memory)
         if subagent_manager is not None:
@@ -225,6 +237,29 @@ class CommandRouter:
         del context
         return self._help_text()
 
+    async def _handle_goal(self, context: CommandContext) -> str:
+        """Create one active goal without entering the normal Agent turn flow."""
+
+        objective = " ".join(context.command.arguments).strip()
+        if not objective:
+            return "用法：/goal <目标描述>"
+
+        session = _require_session(context)
+        current = session.goal_state
+        if current is not None and current.status == "active":
+            return (
+                f"当前已有进行中的目标：{current.objective}。"
+                "请等待目标完成或取消后再创建新的目标。"
+            )
+
+        goal = GoalState.create(objective)
+        context.session_manager.save(session.with_goal_state(goal))
+        if self._message_bus is not None:
+            await self._message_bus.publish_inbound(
+                _goal_start_message(context.message, context.session_key, goal.objective)
+            )
+        return f"已创建目标：{goal.objective}\n\n已开始执行目标。"
+
     async def _handle_compact(self, context: CommandContext) -> str:
         session = _require_session(context)
         compactor = context.session_compactor
@@ -308,6 +343,26 @@ def _require_session(context: CommandContext) -> Session:
     if context.session is None:
         raise RuntimeError("Command requires a session")
     return context.session
+
+
+def _goal_start_message(
+    message: InboundMessage,
+    session_key: str,
+    objective: str,
+) -> InboundMessage:
+    """Build the internal turn that begins work on a newly saved goal."""
+
+    return InboundMessage(
+        channel=message.channel,
+        chat_id=message.chat_id,
+        sender_id=message.sender_id,
+        session_id=session_key,
+        content=_GOAL_START_MESSAGE_TEMPLATE.format(objective=objective),
+        metadata={
+            **message.metadata,
+            "source": "goal",
+        },
+    )
 
 
 def _format_subagent_task(

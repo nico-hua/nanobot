@@ -80,6 +80,7 @@ class Application:
             config.context_window_tokens,
             config.provider.default_max_tokens,
         )
+        self._session_manager = SessionManager(config.workspace)
         # The subagent context intentionally has no manager, so a future
         # SpawnTool can require that dependency and remain unavailable here.
         subagent_tool_context = ToolContext(
@@ -102,7 +103,6 @@ class Application:
                 subagent_manager=self._subagent_manager,
             ),
         )
-        self._session_manager = SessionManager(config.workspace)
         self._session_compactor = SessionCompactor(
             self._provider,
             token_threshold=config.compaction_threshold_tokens,

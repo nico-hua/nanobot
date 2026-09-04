@@ -6,6 +6,7 @@ from .compactor import (
     SessionCompactor,
 )
 from .manager import SessionManager
+from .goals import GoalState, GoalStatus
 from .models import Session
 from .storage import JsonlSessionStorage
 
@@ -13,6 +14,8 @@ __all__ = [
     "DEFAULT_COMPACTION_RECENT_TOKENS",
     "DEFAULT_COMPACTION_THRESHOLD_TOKENS",
     "JsonlSessionStorage",
+    "GoalState",
+    "GoalStatus",
     "Session",
     "SessionCompactor",
     "SessionManager",
