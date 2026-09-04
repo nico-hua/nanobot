@@ -6,12 +6,12 @@
 
 - 统一的 `LLMProvider` 抽象，以及 OpenAI-compatible 和 Anthropic-compatible Provider。
 - Provider 无关的消息、工具调用和 `LLMResponse` 模型。
-- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令。
+- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
 - 最小 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
 - QQ 文本 Channel、ChannelManager、Application 生命周期与 `python -m nanobot` CLI 入口。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。
-- Session 级持续目标：`GoalState` 独立持久化；`/goal <objective>` 保存目标后，会在同一 session 中启动一次基于当前上下文的 Agent turn。
+- Session 级持续目标：`GoalState` 独立持久化；`/goal <objective>` 保存目标后，会在同一 session 中启动一次基于当前上下文的 Agent turn；`/goal status` 可查询状态，`/goal stop` 可取消 active goal，进行中的目标会阻止 `/new` 重置会话。
 - 长期记忆：`MEMORY.md` 读取、LLM 整理，以及由 `history.jsonl` 和 `.memory_cursor` 驱动的可恢复后台事件队列。
 - workspace Skills：静态 Skill 发现、always-active 指令、`$skill-name` 当前请求激活和环境依赖可用性检查。
 

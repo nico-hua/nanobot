@@ -225,6 +225,11 @@ class CommandRouter:
 
     async def _handle_new(self, context: CommandContext) -> str:
         session = _require_session(context)
+        if session.goal_state is not None and session.goal_state.status == "active":
+            return (
+                f"当前会话存在进行中的目标：{session.goal_state.objective}。"
+                "请等待目标完成，或先使用 /goal stop 取消目标后再开始新会话。"
+            )
         context.session_manager.save(session.reset())
         return "已开始新的会话，当前会话的短期历史已清空。"
 
@@ -240,11 +245,27 @@ class CommandRouter:
     async def _handle_goal(self, context: CommandContext) -> str:
         """Create one active goal without entering the normal Agent turn flow."""
 
-        objective = " ".join(context.command.arguments).strip()
-        if not objective:
-            return "用法：/goal <目标描述>"
-
+        arguments = context.command.arguments
+        action = arguments[0].lower() if arguments else None
         session = _require_session(context)
+        if action in {"status", "stop"}:
+            if len(arguments) != 1:
+                return "用法：/goal status 或 /goal stop"
+            current = session.goal_state
+            if current is None:
+                return "当前会话没有目标。"
+            if action == "status":
+                return f"当前目标状态：{current.status}\n目标：{current.objective}"
+            if current.status != "active":
+                return f"当前目标已处于 {current.status} 状态。"
+            stopped = current.finish("cancelled")
+            context.session_manager.save(session.with_goal_state(stopped))
+            return f"已停止目标：{stopped.objective}"
+
+        objective = " ".join(arguments).strip()
+        if not objective:
+            return "用法：/goal <目标描述>、/goal status 或 /goal stop"
+
         current = session.goal_state
         if current is not None and current.status == "active":
             return (

@@ -173,7 +173,9 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
     async def test_new_clears_and_persists_the_current_session_without_a_provider_call(self) -> None:
         previous = self._sessions.get_or_create("session-1").with_messages(
             (HumanMessage(content="Earlier question."), AIMessage(content="Earlier answer."))
-        ).with_summary("Earlier summary.", 2)
+        ).with_summary("Earlier summary.", 2).with_goal_state(
+            GoalState.create("A completed objective.").finish("completed")
+        )
         self._sessions.save(previous)
         provider = ScriptedProvider(())
         loop = self._loop(provider)
@@ -185,6 +187,25 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(recovered.messages, ())
         self.assertIsNone(recovered.summary)
         self.assertEqual(recovered.summary_until, 0)
+        self.assertIsNone(recovered.goal_state)
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_new_preserves_an_active_goal_and_does_not_reset_the_session(self) -> None:
+        active_goal = GoalState.create("Finish the migration.")
+        previous = self._sessions.get_or_create("session-1").with_messages(
+            (HumanMessage(content="Earlier question."),)
+        ).with_goal_state(active_goal)
+        self._sessions.save(previous)
+        provider = ScriptedProvider(())
+        loop = self._loop(provider)
+
+        result = await _dispatch(loop, "/new", "test", "chat-1", "session-1")
+
+        restored = self._sessions.get_or_create("session-1")
+        self.assertIn("存在进行中的目标", result.content)
+        self.assertIn("/goal stop", result.content)
+        self.assertEqual(restored.messages, previous.messages)
+        self.assertEqual(restored.goal_state, active_goal)
         self.assertEqual(provider.complete_calls, [])
 
     async def test_help_unknown_and_invalid_argument_commands_do_not_call_the_provider(self) -> None:
@@ -251,8 +272,58 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
 
         result = await _dispatch(loop, "/goal   ", "test", "chat-1", "session-1")
 
-        self.assertEqual(result.content, "用法：/goal <目标描述>")
+        self.assertEqual(
+            result.content,
+            "用法：/goal <目标描述>、/goal status 或 /goal stop",
+        )
         self.assertIsNone(self._sessions.get_or_create("session-1").goal_state)
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_status_returns_the_current_goal_without_running_the_agent(self) -> None:
+        active_goal = GoalState.create("Finish the migration.")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(active_goal)
+        )
+        bus = RecordingMessageBus()
+        provider = ScriptedProvider(())
+        loop = self._loop(provider, message_bus=bus)
+
+        result = await _dispatch(loop, "/goal status", "test", "chat-1", "session-1")
+
+        self.assertIn("当前目标状态：active", result.content)
+        self.assertIn("Finish the migration.", result.content)
+        self.assertEqual(self._sessions.get_or_create("session-1").goal_state, active_goal)
+        self.assertEqual(bus.inbound_messages, [])
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_stop_cancels_and_persists_the_current_goal_without_running_the_agent(self) -> None:
+        active_goal = GoalState.create("Finish the migration.")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(active_goal)
+        )
+        bus = RecordingMessageBus()
+        provider = ScriptedProvider(())
+        loop = self._loop(provider, message_bus=bus)
+
+        result = await _dispatch(loop, "/goal stop", "test", "chat-1", "session-1")
+
+        restored = SessionManager(self._temporary_directory.name).get_or_create("session-1")
+        self.assertIn("已停止目标", result.content)
+        self.assertIsNotNone(restored.goal_state)
+        self.assertEqual(restored.goal_state.status, "cancelled")
+        self.assertIsNotNone(restored.goal_state.ended_at)
+        self.assertEqual(bus.inbound_messages, [])
+        self.assertEqual(provider.complete_calls, [])
+
+    async def test_goal_status_and_stop_report_when_no_goal_exists(self) -> None:
+        provider = ScriptedProvider(())
+        loop = self._loop(provider)
+
+        status_result = await _dispatch(loop, "/goal status", "test", "chat-1", "session-1")
+        stop_result = await _dispatch(loop, "/goal stop", "test", "chat-1", "session-1")
+
+        self.assertEqual(status_result.content, "当前会话没有目标。")
+        self.assertEqual(stop_result.content, "当前会话没有目标。")
         self.assertEqual(provider.complete_calls, [])
 
     async def test_goal_progress_message_uses_the_saved_session_context(self) -> None:

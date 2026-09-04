@@ -73,9 +73,9 @@ class Session:
         return replace(self, goal_state=goal_state)
 
     def reset(self) -> Session:
-        """Return the same session identity with all short-term state cleared."""
+        """Return the same session identity with its short-term state and goal cleared."""
 
-        return replace(self, messages=(), summary=None, summary_until=0)
+        return replace(self, messages=(), summary=None, summary_until=0, goal_state=None)
 
 
 def _validate_session_key(key: str) -> None:

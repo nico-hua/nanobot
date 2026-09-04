@@ -64,6 +64,8 @@
 - [x] 新增 `COMMANDS.md`，集中说明应用启动参数和当前聊天渠道的斜杠命令。最近一次完整离线测试为 `346 passed, 7 skipped`。
 - [x] 增加 Session 独立 `goal_state`：`GoalState` 持久化 active、completed、cancelled、failed 状态、目标与时间边界，不使用通用 Session metadata。`/goal <objective>` 会保存或替换终态目标；已有 active goal 时不覆盖。
 - [x] `/goal` 保存成功后向共享 `MessageBus` 发布带 `source=goal` 的内部 `InboundMessage`，使用当前 Session 上下文和可用工具启动一次普通 Agent turn。QQ 将 goal 结果作为主动消息发送，不复用旧 `message_id`。自动持续续跑仍留待后续阶段。
+- [x] 完善目标控制命令：`/goal status` 只读返回当前目标状态，`/goal stop` 将 active goal 持久化为 `cancelled`；两者均不调用 LLM。`/new` 在存在 active goal 时拒绝重置并提示先完成或停止目标，其他情况下会同时清空短期会话状态和终态目标。
+- [x] 整理内置文件工具：`ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool` 合并到 `tools/builtin/filesystem.py`，保留原有工具接口、UTF-8 处理、路径安全校验与错误约定；`ToolLoader` 按工具类名稳定排序，保持注册顺序不变。完整离线测试为 `358 passed, 7 skipped`。
 
 ## 待开发功能
 

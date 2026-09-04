@@ -24,8 +24,10 @@ python -m nanobot [--config <path>] [--workspace <path>]
 | 命令 | 作用 |
 | --- | --- |
 | `/help` | 显示当前已注册命令及简短说明。 |
-| `/new` | 清空当前 session 的短期对话历史和摘要，开始新会话；不会删除 workspace 的长期记忆 `MEMORY.md`，也不会改变 session key。 |
+| `/new` | 清空当前 session 的短期对话历史、摘要和终态目标，开始新会话；不会删除 workspace 的长期记忆 `MEMORY.md`，也不会改变 session key。存在 active goal 时会拒绝重置，需等待完成或先使用 `/goal stop`。 |
 | `/goal <objective>` | 为当前 session 创建并持久化一个 active goal。已有 active goal 时不会覆盖；已完成、失败或取消的目标可被替换。保存成功后，Agent 会在同一 session 中开始执行目标。 |
+| `/goal status` | 显示当前 session 的目标状态与目标描述；不调用 LLM。 |
+| `/goal stop` | 将当前 active goal 设为 `cancelled` 并持久化；不调用 LLM，也不会启动新的目标执行。 |
 | `/stop` | 请求取消当前 session 正在运行的普通 Agent turn。没有活动 turn 时会明确提示。它不会取消后台 Subagent；请使用 `/subagents cancel`。 |
 | `/compact` | 对当前 session 较早的完整对话轮次执行已有的摘要压缩；没有可压缩内容时只返回提示。 |
 | `/memory` | 只读显示当前 workspace 的长期记忆 `MEMORY.md`。文件为空或不存在时返回提示；内容过长会截断。 |

@@ -73,4 +73,4 @@ class ToolLoader:
                 seen_classes.add(candidate)
                 classes.append(candidate)
 
-        return tuple(classes)
+        return tuple(sorted(classes, key=lambda candidate: candidate.__name__))
