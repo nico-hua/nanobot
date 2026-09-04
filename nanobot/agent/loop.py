@@ -32,8 +32,7 @@ The user sent the following new input while the active goal is running:
 {messages}
 
 Continue the active goal while incorporating this input. If changing or stopping the
-goal is necessary, use the available goal-update capability; if it is unavailable,
-ask the user to use the relevant `/goal` control command.
+goal is necessary, use the update_goal tool with action update or stop.
 
 [/New user input]"""
 
@@ -375,13 +374,19 @@ class AgentLoop:
                 session = self._session_manager.get_or_create(session_key)
                 history = _without_system_messages(session.messages)
                 current_message = HumanMessage(content=inbound.content)
+                blocked_tool_names = _blocked_tool_names(is_goal_turn)
+                available_tools = tuple(
+                    tool
+                    for tool in self._tool_registry.tools
+                    if tool.name not in blocked_tool_names
+                )
                 try:
                     request_messages = self._context_builder.build_request_messages(
                         history,
                         current_message,
                         summary=session.summary,
                         summary_until=session.summary_until,
-                        tools=self._tool_registry.tools,
+                        tools=available_tools,
                     )
                 except ContextWindowExceededError:
                     logger.warning("Agent request exceeds the configured context window")
@@ -396,6 +401,7 @@ class AgentLoop:
                     messages=request_messages,
                     provider=self._provider,
                     tool_registry=self._tool_registry,
+                    blocked_tool_names=blocked_tool_names,
                     is_goal_mode=is_goal_turn,
                     injection_callback=(
                         lambda: self._take_goal_user_messages(session_key)
@@ -409,6 +415,7 @@ class AgentLoop:
                     chat_id=inbound.chat_id,
                     sender_id=inbound.sender_id,
                     metadata=inbound.metadata,
+                    is_goal_mode=is_goal_turn,
                 )
                 with bind_request_context(request_context):
                     result = await self._runner.run(spec)
@@ -652,3 +659,9 @@ def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMes
 
 def _is_goal_message(inbound: InboundMessage) -> bool:
     return inbound.metadata.get("source") == "goal"
+
+
+def _blocked_tool_names(is_goal_mode: bool) -> tuple[str, ...]:
+    """Return the goal tool excluded from the current execution mode."""
+
+    return ("create_goal",) if is_goal_mode else ("update_goal",)

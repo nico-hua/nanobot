@@ -174,7 +174,7 @@ class SubagentManagerTest(unittest.IsolatedAsyncioTestCase):
             tuple(
                 tool.name
                 for tool in self._main_tool_registry.tools
-                if tool.name != "spawn"
+                if tool.name not in {"spawn", "create_goal", "update_goal"}
             ),
         )
 
@@ -212,8 +212,14 @@ class SubagentManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(second_registry, self._main_tool_registry)
         self.assertIs(first_registry, second_registry)
         self.assertFalse(first_registry.has("spawn"))
-        self.assertEqual(runner.specs[0].blocked_tool_names, ())
-        self.assertEqual(runner.specs[1].blocked_tool_names, ())
+        self.assertEqual(
+            runner.specs[0].blocked_tool_names,
+            ("spawn", "create_goal", "update_goal"),
+        )
+        self.assertEqual(
+            runner.specs[1].blocked_tool_names,
+            ("spawn", "create_goal", "update_goal"),
+        )
 
     async def test_binds_the_request_context_for_child_tools(self) -> None:
         runner = RuntimeRecordingRunner(_agent_result("Completed."))

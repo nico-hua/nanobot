@@ -41,6 +41,7 @@ _FINAL_TASK_STATUSES = frozenset({"completed", "failed", "cancelled", "timeout"}
 _DEFAULT_MAX_BACKGROUND_TASKS = 4
 _DEFAULT_BACKGROUND_TIMEOUT_SECONDS = 300.0
 _RESULT_SUMMARY_LIMIT = 1_000
+_BLOCKED_TOOL_NAMES = ("spawn", "create_goal", "update_goal")
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,7 @@ class SubagentManager:
             ),
             provider=self._provider,
             tool_registry=self._tool_registry,
+            blocked_tool_names=_BLOCKED_TOOL_NAMES,
         )
         try:
             if request_context is None:

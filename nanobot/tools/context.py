@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from ..bus import MessageBus
     from ..cron import CronService
+    from ..session import SessionManager
     from ..subagent import SubagentManager
 
 
@@ -33,6 +35,8 @@ class ToolContext:
     cron_service: CronService | None = None
     cron_timezone: str = "Asia/Shanghai"
     subagent_manager: SubagentManager | None = None
+    session_manager: SessionManager | None = None
+    message_bus: MessageBus | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +48,7 @@ class RequestContext:
     chat_id: str
     sender_id: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    is_goal_mode: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -56,6 +61,8 @@ class RequestContext:
                 raise ValueError(f"Request context {name} must be a non-empty string")
         if not isinstance(self.metadata, Mapping):
             raise TypeError("Request context metadata must be a mapping")
+        if not isinstance(self.is_goal_mode, bool):
+            raise TypeError("Request context is_goal_mode must be a bool")
         object.__setattr__(self, "metadata", dict(self.metadata))
 
 

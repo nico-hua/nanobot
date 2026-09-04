@@ -9,6 +9,13 @@ from typing import Any, Literal
 
 GoalStatus = Literal["active", "completed", "cancelled", "failed"]
 _FINAL_GOAL_STATUSES = frozenset({"completed", "cancelled", "failed"})
+_GOAL_START_MESSAGE_TEMPLATE = (
+    "Start working on the current sustained goal.\n\n"
+    "Goal:\n"
+    "{objective}\n\n"
+    "Begin from the context saved in the current Session and use the available "
+    "tools to make steady progress toward the goal."
+)
 
 
 @dataclass(frozen=True)
@@ -98,6 +105,14 @@ class GoalState:
             objective=objective,
             updated_at=datetime.now(timezone.utc),
         )
+
+
+def build_goal_start_content(objective: str) -> str:
+    """Build the internal instruction that starts work on a saved goal."""
+
+    if not isinstance(objective, str) or not objective.strip():
+        raise ValueError("Goal objective must be a non-empty string")
+    return _GOAL_START_MESSAGE_TEMPLATE.format(objective=objective.strip())
 
 
 def _goal_status(value: object) -> GoalStatus:

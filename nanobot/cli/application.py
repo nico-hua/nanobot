@@ -101,6 +101,8 @@ class Application:
             replace(
                 subagent_tool_context,
                 subagent_manager=self._subagent_manager,
+                session_manager=self._session_manager,
+                message_bus=self._message_bus,
             ),
         )
         self._session_compactor = SessionCompactor(

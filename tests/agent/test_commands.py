@@ -7,7 +7,14 @@ import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 
-from nanobot.agent import AgentLoop, AgentRunner, CommandRouter, ContextBuilder
+from nanobot.agent import (
+    AgentLoop,
+    AgentRunner,
+    AgentRunResult,
+    AgentRunSpec,
+    CommandRouter,
+    ContextBuilder,
+)
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.memory import MemoryConsolidator, MemoryStore
 from nanobot.providers import (
@@ -183,6 +190,30 @@ class BlockingTool(Tool):
         return ToolResult(content=f"wait: {label}")
 
 
+class NamedTool(Tool):
+    def __init__(self, name: str) -> None:
+        super().__init__(name, f"Test tool {name}.")
+
+    async def execute(self, **arguments: object) -> ToolResult:
+        del arguments
+        return ToolResult(content="unused")
+
+
+class SpecRecordingRunner(AgentRunner):
+    def __init__(self) -> None:
+        self.specs: list[AgentRunSpec] = []
+
+    async def run(self, spec: AgentRunSpec) -> AgentRunResult:
+        self.specs.append(spec)
+        return AgentRunResult(
+            content="Recorded.",
+            messages=(*spec.messages, AIMessage(content="Recorded.")),
+            tools_used=(),
+            token_usage=None,
+            stop_reason="stop",
+        )
+
+
 class RecordingCompactor(SessionCompactor):
     def __init__(self, provider: LLMProvider) -> None:
         super().__init__(provider, token_threshold=2, recent_token_budget=0)
@@ -276,6 +307,35 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.content, "Normal reply.")
         self.assertEqual(len(provider.complete_calls), 1)
+
+    async def test_blocks_goal_tools_by_agent_run_mode(self) -> None:
+        runner = SpecRecordingRunner()
+        registry = ToolRegistry(
+            (
+                NamedTool("create_goal"),
+                NamedTool("update_goal"),
+            )
+        )
+        loop = self._loop(
+            ScriptedProvider(()),
+            runner=runner,
+            tool_registry=registry,
+        )
+
+        await _dispatch(loop, "Normal turn.", "test", "chat-1", "session-normal")
+        await _dispatch(
+            loop,
+            "Goal turn.",
+            "test",
+            "chat-2",
+            "session-goal",
+            {"source": "goal"},
+        )
+
+        self.assertEqual(runner.specs[0].blocked_tool_names, ("update_goal",))
+        self.assertFalse(runner.specs[0].is_goal_mode)
+        self.assertEqual(runner.specs[1].blocked_tool_names, ("create_goal",))
+        self.assertTrue(runner.specs[1].is_goal_mode)
 
     async def test_new_clears_and_persists_the_current_session_without_a_provider_call(self) -> None:
         previous = self._sessions.get_or_create("session-1").with_messages(
@@ -721,6 +781,8 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("Only update for two.", one_injection.content)
             self.assertIn("Only update for two.", two_injection.content)
             self.assertNotIn("First update for one.", two_injection.content)
+            self.assertIn("use the update_goal tool", one_injection.content)
+            self.assertNotIn("/goal", one_injection.content)
 
             first_session = self._sessions.get_or_create("session-one")
             second_session = self._sessions.get_or_create("session-two")
@@ -949,11 +1011,13 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         message_bus: MessageBus | None = None,
         session_compactor: SessionCompactor | None = None,
         command_router: CommandRouter | None = None,
+        runner: AgentRunner | None = None,
+        tool_registry: ToolRegistry | None = None,
     ) -> AgentLoop:
         return AgentLoop(
-            AgentRunner(),
+            runner or AgentRunner(),
             provider,
-            ToolRegistry(),
+            tool_registry or ToolRegistry(),
             self._sessions,
             ContextBuilder(self._temporary_directory.name),
             message_bus=message_bus,

@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryStore
-from ..session import GoalState, Session, SessionCompactor, SessionManager
+from ..session import Session, SessionCompactor, SessionManager
+from ..session.goals import build_goal_start_content
 
 if TYPE_CHECKING:
     from ..subagent import BackgroundSubagentTask, SubagentManager
@@ -18,13 +19,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MEMORY_OUTPUT_LIMIT = 4_000
-_GOAL_START_MESSAGE_TEMPLATE = (
-    "Start working on the current sustained goal.\n\n"
-    "Goal:\n"
-    "{objective}\n\n"
-    "Begin from the context saved in the current Session and use the available "
-    "tools to make steady progress toward the goal."
-)
 
 
 @dataclass(frozen=True)
@@ -260,31 +254,35 @@ class CommandRouter:
         if action in {"status", "stop"}:
             if len(arguments) != 1:
                 return "用法：/goal status 或 /goal stop"
-            current = session.goal_state
-            if current is None:
-                return "当前会话没有目标。"
             if action == "status":
+                current = session.goal_state
+                if current is None:
+                    return "当前会话没有目标。"
                 return f"当前目标状态：{current.status}\n目标：{current.objective}"
-            if current.status != "active":
-                return f"当前目标已处于 {current.status} 状态。"
-            stopped = current.finish("cancelled")
-            context.session_manager.save(session.with_goal_state(stopped))
+            try:
+                updated_session = context.session_manager.update_goal(
+                    session,
+                    cancel=True,
+                )
+            except ValueError as error:
+                return str(error)
             context.cancel_goal_turn()
-            return f"已停止目标：{stopped.objective}"
+            goal = updated_session.goal_state
+            if goal is None:
+                raise RuntimeError("Cancelling a goal must retain terminal goal state")
+            return f"已停止目标：{goal.objective}"
 
         objective = " ".join(arguments).strip()
         if not objective:
             return "用法：/goal <目标描述>、/goal status 或 /goal stop"
 
-        current = session.goal_state
-        if current is not None and current.status == "active":
-            return (
-                f"当前已有进行中的目标：{current.objective}。"
-                "请等待目标完成或取消后再创建新的目标。"
-            )
-
-        goal = GoalState.create(objective)
-        context.session_manager.save(session.with_goal_state(goal))
+        try:
+            updated_session = context.session_manager.create_goal(session, objective)
+        except ValueError as error:
+            return str(error)
+        goal = updated_session.goal_state
+        if goal is None:
+            raise RuntimeError("Creating a goal must persist active goal state")
         if self._message_bus is not None:
             await self._message_bus.publish_inbound(
                 _goal_start_message(context.message, context.session_key, goal.objective)
@@ -388,7 +386,7 @@ def _goal_start_message(
         chat_id=message.chat_id,
         sender_id=message.sender_id,
         session_id=session_key,
-        content=_GOAL_START_MESSAGE_TEMPLATE.format(objective=objective),
+        content=build_goal_start_content(objective),
         metadata={
             **message.metadata,
             "source": "goal",

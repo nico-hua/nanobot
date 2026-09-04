@@ -73,7 +73,9 @@
 - [x] 完善目标执行模式：`source=goal` 的内部消息按 session 跟踪正在运行的目标 turn；成功后将 active goal 标记为 `completed`，执行失败或非显式取消时标记为 `failed`。目标执行期间，`/goal`、`/goal status` 与 `/goal stop` 可绕过 session lock 立即处理；`/goal stop` 会先持久化 `cancelled` 状态，再取消对应执行任务。
 - [x] 支持目标执行期间的用户消息注入：每个运行中的目标 session 拥有独立 pending queue。普通外部文本不会启动第二个 Runner；`AgentRunner` 在每个工具完成后读取并合并队列中的输入，将其作为带边界标记的单个 user 消息追加在完整 tool result 批次之后，再继续模型调用。注入内容会随成功 turn 一起持久化，控制命令不会进入该队列。
 - [x] 简化长期记忆事件规则：每个成功保存的 Agent turn 都会追加记忆事件。命令、失败和取消路径本身不会生成事件，移除了当前没有生产方的 `ephemeral`、`system` 与 `memory_consolidator` metadata 过滤。
-- [x] 最近一次完整离线测试：`359 passed, 7 skipped`。
+- [x] 新增 `create_goal` 与 `update_goal` 内置工具：两者复用 `SessionManager` 的目标创建、更新、取消与持久化逻辑。`create_goal` 仅能在普通模式调用，成功后复用 `/goal` 的内部消息模板向 `MessageBus` 投递 `source=goal` 的后续 turn，并立即返回已调度确认；`update_goal` 仅能在目标模式调用，可替换目标或停止目标。消息总线发布失败会返回清晰原因，且不会吞掉取消信号。
+- [x] 增加 Agent 运行模式的工具权限控制：普通 Agent run 通过 `AgentRunSpec.blocked_tool_names` 禁用 `update_goal`，目标 run 禁用 `create_goal`；被禁用工具同时从 ContextBuilder 的工具预算和 Provider schema 中移除。Subagent 的 Spec 固定禁用 `spawn`、`create_goal`、`update_goal`，避免递归创建子 Agent 或修改主会话目标。
+- [x] 最近一次完整离线测试：`368 passed, 7 skipped`。
 
 ## 待开发功能
 
