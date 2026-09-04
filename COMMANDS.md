@@ -19,7 +19,7 @@ python -m nanobot [--config <path>] [--workspace <path>]
 
 命令会在 Agent 调用模型之前由 `CommandRouter` 处理。命令名称不区分大小写，并会忽略首尾空格；未知或格式错误的 slash command 不会交给 LLM。
 
-除 `/stop` 外，命令会与同一 session 的普通对话串行执行。目标执行期间，`/goal`、`/goal status` 和 `/goal stop` 不等待目标 turn 持有的 session lock。命令本身不会写入 `Session.messages`，也不会生成长期记忆事件；`/goal` 在保存目标状态后会额外投递一个内部普通 turn，因此该 turn 会按常规流程写入会话和记忆事件。
+除 `/stop` 外，命令会与同一 session 的普通对话串行执行。目标执行期间，普通外部文本会合并到该目标 session 的 pending queue，并在当前 Runner 完成工具调用后作为 user 输入继续处理，不会启动第二个 Runner。`/goal`、`/goal status` 和 `/goal stop` 不等待目标 turn 持有的 session lock；其他 slash command 仍会等待该锁。命令本身不会写入 `Session.messages`，也不会生成长期记忆事件；`/goal` 在保存目标状态后会额外投递一个内部普通 turn，因此该 turn 会按常规流程写入会话和记忆事件。
 
 | 命令 | 作用 |
 | --- | --- |

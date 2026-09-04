@@ -25,6 +25,17 @@ _CONTEXT_WINDOW_EXCEEDED_MESSAGE = (
     "请新开会话或缩短消息后重试。"
 )
 _PROCESSING_ERROR_MESSAGE = "处理消息时发生错误，请稍后重试。"
+_GOAL_INJECTION_TEMPLATE = """[New user input during goal execution]
+
+The user sent the following new input while the active goal is running:
+
+{messages}
+
+Continue the active goal while incorporating this input. If changing or stopping the
+goal is necessary, use the available goal-update capability; if it is unavailable,
+ask the user to use the relevant `/goal` control command.
+
+[/New user input]"""
 
 
 class AgentLoop:
@@ -103,6 +114,8 @@ class AgentLoop:
         self._active_turn_tasks: dict[str, set[asyncio.Task[Any]]] = {}
         # source=goal 的内部 turn 在执行期间独占目标模式；/goal 控制命令可据此绕过 session lock。
         self._goal_turn_tasks: dict[str, asyncio.Task[Any]] = {}
+        # 目标运行期间的普通用户输入只由当前 Runner 在安全检查点注入。
+        self._pending_user_messages: dict[str, asyncio.Queue[InboundMessage]] = {}
         self._inbound_tasks: set[asyncio.Task[None]] = set()
         self._compaction_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -127,7 +140,18 @@ class AgentLoop:
                 except TimeoutError:
                     continue
                 invocation = self._command_router.parse(inbound.content)
-                if self._command_router.is_stop_command(invocation):
+                session_key = _session_key(
+                    inbound.channel,
+                    inbound.chat_id,
+                    inbound.session_id,
+                )
+                if self._should_queue_goal_user_message(
+                    inbound,
+                    invocation,
+                    session_key,
+                ):
+                    self._queue_goal_user_message(session_key, inbound)
+                elif self._command_router.is_stop_command(invocation):
                     # /stop 不能等待当前 session 的锁，否则无法停止正在运行的 turn。
                     await self._handle_stop(inbound, invocation)
                 elif self._is_goal_control_command(inbound, invocation):
@@ -166,6 +190,7 @@ class AgentLoop:
         self._inbound_tasks.clear()
         self._active_turn_tasks.clear()
         self._goal_turn_tasks.clear()
+        self._pending_user_messages.clear()
 
     async def wait_for_compactions(self) -> None:
         """Wait until currently scheduled background compactions have completed."""
@@ -371,6 +396,12 @@ class AgentLoop:
                     messages=request_messages,
                     provider=self._provider,
                     tool_registry=self._tool_registry,
+                    is_goal_mode=is_goal_turn,
+                    injection_callback=(
+                        lambda: self._take_goal_user_messages(session_key)
+                    )
+                    if is_goal_turn
+                    else None,
                 )
                 request_context = RequestContext(
                     session_key=session_key,
@@ -479,6 +510,55 @@ class AgentLoop:
     ) -> None:
         if self._goal_turn_tasks.get(session_key) is task:
             self._goal_turn_tasks.pop(session_key, None)
+            self._pending_user_messages.pop(session_key, None)
+
+    def _should_queue_goal_user_message(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation | None,
+        session_key: str,
+    ) -> bool:
+        """Accept only external plain text while a goal Runner owns the session."""
+
+        return (
+            invocation is None
+            and not _is_goal_message(inbound)
+            and inbound.metadata.get("source") is None
+            and self._is_goal_mode(session_key)
+        )
+
+    def _queue_goal_user_message(
+        self,
+        session_key: str,
+        inbound: InboundMessage,
+    ) -> None:
+        queue = self._pending_user_messages.setdefault(session_key, asyncio.Queue())
+        queue.put_nowait(inbound)
+
+    async def _take_goal_user_messages(
+        self,
+        session_key: str,
+    ) -> tuple[HumanMessage, ...]:
+        """Merge queued external input into one user message for the active goal."""
+
+        queue = self._pending_user_messages.get(session_key)
+        if queue is None:
+            return ()
+        messages: list[InboundMessage] = []
+        while True:
+            try:
+                messages.append(queue.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        if queue.empty() and self._pending_user_messages.get(session_key) is queue:
+            self._pending_user_messages.pop(session_key, None)
+        if not messages:
+            return ()
+        content = "\n".join(
+            f"{index}. {message.content}"
+            for index, message in enumerate(messages, start=1)
+        )
+        return (HumanMessage(content=_GOAL_INJECTION_TEMPLATE.format(messages=content)),)
 
     def _cancel_active_turn(self, session_key: str) -> bool:
         current_task = asyncio.current_task()

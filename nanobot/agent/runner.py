@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from ..providers import (
     AIMessage,
     BaseMessage,
+    HumanMessage,
     LLMProvider,
     TokenUsage,
     ToolCallRequest,
@@ -17,6 +18,8 @@ from ..providers import (
 from ..tools import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+InjectionCallback = Callable[[], Awaitable[Sequence[HumanMessage]]]
 
 
 class AgentRunnerError(RuntimeError):
@@ -32,6 +35,8 @@ class AgentRunSpec:
     tool_registry: ToolRegistry
     max_iterations: int = 30
     blocked_tool_names: Sequence[str] = ()
+    is_goal_mode: bool = False
+    injection_callback: InjectionCallback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.messages, Sequence) or not all(
@@ -59,6 +64,14 @@ class AgentRunSpec:
             for name in self.blocked_tool_names
         ):
             raise ValueError("blocked_tool_names must not contain blank names")
+        if not isinstance(self.is_goal_mode, bool):
+            raise TypeError("is_goal_mode must be a boolean")
+        if self.injection_callback is not None and not callable(self.injection_callback):
+            raise TypeError("injection_callback must be callable or None")
+        if self.is_goal_mode and self.injection_callback is None:
+            raise ValueError("goal-mode runs require an injection_callback")
+        if not self.is_goal_mode and self.injection_callback is not None:
+            raise ValueError("injection_callback is only supported for goal-mode runs")
 
         object.__setattr__(self, "messages", tuple(self.messages))
         object.__setattr__(self, "blocked_tool_names", tuple(self.blocked_tool_names))
@@ -105,6 +118,10 @@ class AgentRunner:
             token_usage = _combine_token_usage(token_usage, response.usage)
             if not response.tool_calls:
                 conversation.append(AIMessage(content=response.content or ""))
+                injected_messages = await _take_injected_messages(spec)
+                if injected_messages:
+                    conversation.extend(injected_messages)
+                    continue
                 logger.info(
                     "Agent run completed (iterations=%d, tool_calls=%d, stop_reason=%s)",
                     iteration + 1,
@@ -126,6 +143,7 @@ class AgentRunner:
                 )
             )
             tools_used.extend(response.tool_calls)
+            injected_messages: list[HumanMessage] = []
             for tool_call in response.tool_calls:
                 if tool_call.name in blocked_tool_names:
                     logger.warning("Blocked requested tool (name=%s)", tool_call.name)
@@ -138,18 +156,22 @@ class AgentRunner:
                             tool_call_id=tool_call.id,
                         )
                     )
-                    continue
-                logger.info("Executing requested tool (name=%s)", tool_call.name)
-                result = await spec.tool_registry.execute(
-                    tool_call.name,
-                    tool_call.arguments,
-                )
-                conversation.append(
-                    ToolMessage(
-                        content=result.content,
-                        tool_call_id=tool_call.id,
+                else:
+                    logger.info("Executing requested tool (name=%s)", tool_call.name)
+                    result = await spec.tool_registry.execute(
+                        tool_call.name,
+                        tool_call.arguments,
                     )
-                )
+                    conversation.append(
+                        ToolMessage(
+                            content=result.content,
+                            tool_call_id=tool_call.id,
+                        )
+                    )
+            injected_messages.extend(await _take_injected_messages(spec))
+            # Keep each assistant tool-call batch contiguous. Provider protocols
+            # require every requested tool result before the next user message.
+            conversation.extend(injected_messages)
 
         logger.error("Agent run exceeded maximum iteration count (%d)", spec.max_iterations)
         raise AgentRunnerError(
@@ -170,3 +192,16 @@ def _combine_token_usage(
         completion_tokens=current.completion_tokens + response_usage.completion_tokens,
         total_tokens=current.total_tokens + response_usage.total_tokens,
     )
+
+
+async def _take_injected_messages(spec: AgentRunSpec) -> tuple[HumanMessage, ...]:
+    """Read goal-mode user input without changing the original request messages."""
+
+    if spec.injection_callback is None:
+        return ()
+    messages = await spec.injection_callback()
+    if isinstance(messages, (str, bytes)) or not isinstance(messages, Sequence):
+        raise TypeError("injection_callback must return a sequence of HumanMessage")
+    if not all(isinstance(message, HumanMessage) for message in messages):
+        raise TypeError("injection_callback must return only HumanMessage instances")
+    return tuple(messages)

@@ -10,9 +10,17 @@ from collections.abc import Awaitable, Callable, Sequence
 from nanobot.agent import AgentLoop, AgentRunner, CommandRouter, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.memory import MemoryConsolidator, MemoryStore
-from nanobot.providers import AIMessage, BaseMessage, HumanMessage, LLMProvider, LLMResponse
+from nanobot.providers import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    ToolMessage,
+)
 from nanobot.session import GoalState, Session, SessionCompactor, SessionManager
-from nanobot.tools import Tool, ToolRegistry
+from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
 
 class ScriptedProvider(LLMProvider):
@@ -100,6 +108,79 @@ class FailingProvider(LLMProvider):
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         raise AssertionError("Command tests must not use streaming")
+
+
+class GoalInjectionProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.complete_calls: list[tuple[BaseMessage, ...]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del tools, max_tokens, temperature
+        request = tuple(messages)
+        self.complete_calls.append(request)
+        tool_results = tuple(
+            message for message in request if isinstance(message, ToolMessage)
+        )
+        if tool_results:
+            label = tool_results[-1].content.removeprefix("wait: ")
+            return LLMResponse(content=f"Goal {label} completed.")
+        goal_message = next(
+            message.content
+            for message in request
+            if isinstance(message, HumanMessage) and message.content.startswith("Goal ")
+        )
+        label = goal_message.removeprefix("Goal ")
+        return LLMResponse(
+            tool_calls=(
+                ToolCallRequest(
+                    id=f"wait-{label}",
+                    name="wait",
+                    arguments={"label": label},
+                ),
+            )
+        )
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        raise AssertionError("Command tests must not use streaming")
+
+
+class BlockingTool(Tool):
+    def __init__(self) -> None:
+        super().__init__(
+            name="wait",
+            description="Wait for the test to release the tool.",
+            parameters=(
+                ToolParameter(
+                    name="label",
+                    description="Identifies the goal execution.",
+                    type="string",
+                    required=True,
+                ),
+            ),
+        )
+        self.started = {label: asyncio.Event() for label in ("one", "two")}
+        self.release = {label: asyncio.Event() for label in ("one", "two")}
+
+    async def execute(self, **arguments: object) -> ToolResult:
+        label = arguments["label"]
+        if not isinstance(label, str):
+            raise TypeError("label must be a string")
+        self.started[label].set()
+        await self.release[label].wait()
+        return ToolResult(content=f"wait: {label}")
 
 
 class RecordingCompactor(SessionCompactor):
@@ -472,6 +553,183 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(cancelled_goal)
             self.assertEqual(cancelled_goal.status, "cancelled")
             self.assertFalse(loop._is_goal_mode("session-1"))
+        finally:
+            await _cancel_task(self, worker)
+
+    async def test_goal_runner_injects_merged_user_messages_without_crossing_sessions(
+        self,
+    ) -> None:
+        self._sessions.save(
+            self._sessions.get_or_create("session-one").with_goal_state(
+                GoalState.create("Finish goal one.")
+            )
+        )
+        self._sessions.save(
+            self._sessions.get_or_create("session-two").with_goal_state(
+                GoalState.create("Finish goal two.")
+            )
+        )
+        bus = MessageBus()
+        provider = GoalInjectionProvider()
+        tool = BlockingTool()
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry((tool,)),
+            self._sessions,
+            ContextBuilder(self._temporary_directory.name),
+            message_bus=bus,
+        )
+        worker = asyncio.create_task(loop.run())
+        try:
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-one",
+                    "sender-1",
+                    "session-one",
+                    "Goal one",
+                    {"source": "goal"},
+                )
+            )
+            await asyncio.wait_for(tool.started["one"].wait(), timeout=1)
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-two",
+                    "sender-2",
+                    "session-two",
+                    "Goal two",
+                    {"source": "goal"},
+                )
+            )
+            await asyncio.wait_for(tool.started["two"].wait(), timeout=1)
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-one",
+                    "sender-1",
+                    "session-one",
+                    "First update for one.",
+                )
+            )
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-one",
+                    "sender-1",
+                    "session-one",
+                    "Second update for one.",
+                )
+            )
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-two",
+                    "sender-2",
+                    "session-two",
+                    "Only update for two.",
+                )
+            )
+            await asyncio.sleep(0)
+
+            self.assertEqual(len(provider.complete_calls), 2)
+            self.assertEqual(loop._pending_user_messages["session-one"].qsize(), 2)
+            self.assertEqual(loop._pending_user_messages["session-two"].qsize(), 1)
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-one",
+                    "sender-1",
+                    "session-one",
+                    "/goal status",
+                )
+            )
+            status_reply = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            self.assertIn("active", status_reply.content)
+            self.assertEqual(loop._pending_user_messages["session-one"].qsize(), 2)
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-one",
+                    "sender-1",
+                    "session-one",
+                    "/help",
+                )
+            )
+            await asyncio.sleep(0)
+            self.assertTrue(bus._outbound.empty())
+            self.assertEqual(loop._pending_user_messages["session-one"].qsize(), 2)
+
+            tool.release["one"].set()
+            first_session_responses = (
+                await asyncio.wait_for(bus.consume_outbound(), timeout=1),
+                await asyncio.wait_for(bus.consume_outbound(), timeout=1),
+            )
+            self.assertTrue(
+                any(
+                    response.content == "Goal one completed."
+                    for response in first_session_responses
+                )
+            )
+            self.assertTrue(
+                any("/help" in response.content for response in first_session_responses)
+            )
+
+            tool.release["two"].set()
+            second_session_response = await asyncio.wait_for(
+                bus.consume_outbound(),
+                timeout=1,
+            )
+            self.assertEqual(second_session_response.content, "Goal two completed.")
+
+            one_follow_up = next(
+                request
+                for request in provider.complete_calls
+                if any(
+                    isinstance(message, ToolMessage) and message.content == "wait: one"
+                    for message in request
+                )
+            )
+            two_follow_up = next(
+                request
+                for request in provider.complete_calls
+                if any(
+                    isinstance(message, ToolMessage) and message.content == "wait: two"
+                    for message in request
+                )
+            )
+            one_injection = next(
+                message
+                for message in one_follow_up
+                if isinstance(message, HumanMessage)
+                and message.content.startswith("[New user input during goal execution]")
+            )
+            two_injection = next(
+                message
+                for message in two_follow_up
+                if isinstance(message, HumanMessage)
+                and message.content.startswith("[New user input during goal execution]")
+            )
+            self.assertLess(
+                one_injection.content.index("First update for one."),
+                one_injection.content.index("Second update for one."),
+            )
+            self.assertNotIn("Only update for two.", one_injection.content)
+            self.assertIn("Only update for two.", two_injection.content)
+            self.assertNotIn("First update for one.", two_injection.content)
+
+            first_session = self._sessions.get_or_create("session-one")
+            second_session = self._sessions.get_or_create("session-two")
+            self.assertEqual(first_session.messages.count(one_injection), 1)
+            self.assertEqual(second_session.messages.count(two_injection), 1)
+            self.assertNotIn(HumanMessage(content="First update for one."), first_session.messages)
+            self.assertNotIn(HumanMessage(content="Only update for two."), first_session.messages)
+            self.assertNotIn("session-one", loop._pending_user_messages)
+            self.assertNotIn("session-two", loop._pending_user_messages)
         finally:
             await _cancel_task(self, worker)
 

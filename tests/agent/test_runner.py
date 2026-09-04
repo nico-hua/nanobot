@@ -175,6 +175,45 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_injects_goal_user_input_after_a_complete_tool_batch(self) -> None:
+        request = tool_call("call-1", "record", value="Beijing")
+        provider = ScriptedProvider(
+            (
+                LLMResponse(tool_calls=(request,)),
+                LLMResponse(content="Updated goal response."),
+            )
+        )
+        tool = RecordingTool()
+        injected = HumanMessage(content="Please also include Shanghai.")
+        callback_calls = 0
+
+        async def inject_user_messages() -> tuple[HumanMessage, ...]:
+            nonlocal callback_calls
+            callback_calls += 1
+            return (injected,) if callback_calls == 1 else ()
+
+        result = await AgentRunner().run(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Continue the goal."),),
+                provider=provider,
+                tool_registry=ToolRegistry((tool,)),
+                is_goal_mode=True,
+                injection_callback=inject_user_messages,
+            )
+        )
+
+        self.assertEqual(
+            provider.complete_calls[1][0],
+            (
+                HumanMessage(content="Continue the goal."),
+                AIMessage(content="", tool_calls=(request,)),
+                ToolMessage(content="recorded: Beijing", tool_call_id="call-1"),
+                injected,
+            ),
+        )
+        self.assertEqual(result.messages[-2:], (injected, AIMessage(content="Updated goal response.")))
+        self.assertEqual(callback_calls, 2)
+
     async def test_executes_multiple_tool_rounds_in_order(self) -> None:
         first_request = tool_call("call-1", "record", value="first")
         second_request = tool_call("call-2", "record", value="second")
