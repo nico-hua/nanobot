@@ -76,6 +76,32 @@ class BlockingProvider(LLMProvider):
         raise AssertionError("Command tests must not use streaming")
 
 
+class FailingProvider(LLMProvider):
+    def __init__(self) -> None:
+        self.complete_calls: list[tuple[BaseMessage, ...]] = []
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del tools, max_tokens, temperature
+        self.complete_calls.append(tuple(messages))
+        raise RuntimeError("goal execution failed")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        raise AssertionError("Command tests must not use streaming")
+
+
 class RecordingCompactor(SessionCompactor):
     def __init__(self, provider: LLMProvider) -> None:
         super().__init__(provider, token_threshold=2, recent_token_budget=0)
@@ -351,6 +377,103 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result.content, "Goal progress.")
         self.assertEqual(result.metadata["source"], "goal")
+        completed_goal = self._sessions.get_or_create("session-1").goal_state
+        self.assertIsNotNone(completed_goal)
+        self.assertEqual(completed_goal.status, "completed")
+        self.assertIsNotNone(completed_goal.ended_at)
+        self.assertFalse(loop._is_goal_mode("session-1"))
+
+    async def test_goal_turn_failure_marks_the_active_goal_as_failed(self) -> None:
+        active_goal = GoalState.create("Finish the migration.")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(active_goal)
+        )
+        provider = FailingProvider()
+        loop = self._loop(provider)
+
+        with self.assertRaisesRegex(RuntimeError, "goal execution failed"):
+            await _dispatch(
+                loop,
+                "Continue the goal.",
+                "test",
+                "chat-1",
+                "session-1",
+                {"source": "goal"},
+            )
+
+        failed_goal = self._sessions.get_or_create("session-1").goal_state
+        self.assertIsNotNone(failed_goal)
+        self.assertEqual(failed_goal.status, "failed")
+        self.assertIsNotNone(failed_goal.ended_at)
+        self.assertFalse(loop._is_goal_mode("session-1"))
+
+    async def test_goal_commands_bypass_goal_mode_and_stop_cancels_execution(self) -> None:
+        active_goal = GoalState.create("Finish the migration.")
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_goal_state(active_goal)
+        )
+        bus = MessageBus()
+        provider = BlockingProvider()
+        loop = self._loop(provider, message_bus=bus)
+        worker = asyncio.create_task(loop.run())
+        try:
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-1",
+                    "sender-1",
+                    "session-1",
+                    "Continue the goal.",
+                    {"source": "goal"},
+                )
+            )
+            await asyncio.wait_for(provider.started.wait(), timeout=1)
+            self.assertTrue(loop._is_goal_mode("session-1"))
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-1",
+                    "sender-1",
+                    "session-1",
+                    "/goal A replacement objective.",
+                )
+            )
+            create_reply = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            self.assertIn("Finish the migration.", create_reply.content)
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-1",
+                    "sender-1",
+                    "session-1",
+                    "/goal status",
+                )
+            )
+            status_reply = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            self.assertIn("active", status_reply.content)
+
+            await bus.publish_inbound(
+                InboundMessage(
+                    "test",
+                    "chat-1",
+                    "sender-1",
+                    "session-1",
+                    "/goal stop",
+                )
+            )
+            stop_reply = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            self.assertIn("Finish the migration.", stop_reply.content)
+            await asyncio.wait_for(provider.finished.wait(), timeout=1)
+            await asyncio.sleep(0)
+
+            cancelled_goal = self._sessions.get_or_create("session-1").goal_state
+            self.assertIsNotNone(cancelled_goal)
+            self.assertEqual(cancelled_goal.status, "cancelled")
+            self.assertFalse(loop._is_goal_mode("session-1"))
+        finally:
+            await _cancel_task(self, worker)
 
     async def test_goal_does_not_replace_an_active_goal(self) -> None:
         active_goal = GoalState.create("Keep the current objective.")
@@ -464,7 +587,7 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(provider.finished.is_set())
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
-            (HumanMessage(content="Long question."),),
+            (),
         )
 
     async def test_stop_reports_when_no_turn_is_active(self) -> None:

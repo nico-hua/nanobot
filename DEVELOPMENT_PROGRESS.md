@@ -67,6 +67,13 @@
 - [x] 完善目标控制命令：`/goal status` 只读返回当前目标状态，`/goal stop` 将 active goal 持久化为 `cancelled`；两者均不调用 LLM。`/new` 在存在 active goal 时拒绝重置并提示先完成或停止目标，其他情况下会同时清空短期会话状态和终态目标。
 - [x] 整理内置文件工具：`ReadFileTool`、`WriteFileTool`、`EditFileTool` 和 `ListDirTool` 合并到 `tools/builtin/filesystem.py`，保留原有工具接口、UTF-8 处理、路径安全校验与错误约定；`ToolLoader` 按工具类名稳定排序，保持注册顺序不变。完整离线测试为 `358 passed, 7 skipped`。
 
+### 2026-09-05
+
+- [x] 调整 Session 写入边界：`AgentLoop` 不再在调用 `AgentRunner` 前单独保存当前 user 消息；仅在 Runner 成功返回后，才一次性持久化已有历史、当前 user 与本轮新增的 assistant/tool 消息。失败、取消和上下文窗口拒绝均不会留下不完整 turn，因此 `ContextBuilder` 不再承担历史补全或修复职责。
+- [x] 完善目标执行模式：`source=goal` 的内部消息按 session 跟踪正在运行的目标 turn；成功后将 active goal 标记为 `completed`，执行失败或非显式取消时标记为 `failed`。目标执行期间，`/goal`、`/goal status` 与 `/goal stop` 可绕过 session lock 立即处理；`/goal stop` 会先持久化 `cancelled` 状态，再取消对应执行任务。
+- [x] 简化长期记忆事件规则：每个成功保存的 Agent turn 都会追加记忆事件。命令、失败和取消路径本身不会生成事件，移除了当前没有生产方的 `ephemeral`、`system` 与 `memory_consolidator` metadata 过滤。
+- [x] 最近一次完整离线测试：`359 passed, 7 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具

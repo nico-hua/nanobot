@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryConsolidator, MemoryEventConsumer, MemoryStore
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
-from ..session import SessionCompactor, SessionManager
+from ..session import Session, SessionCompactor, SessionManager
 from ..tools import RequestContext, ToolRegistry, bind_request_context
 from .commands import CommandInvocation, CommandRouter
 from .context import ContextBuilder, ContextWindowExceededError
@@ -96,11 +95,14 @@ class AgentLoop:
             subagent_manager=subagent_manager,
             message_bus=message_bus,
             cancel_active_turn=self._cancel_active_turn,
+            cancel_goal_turn=self._cancel_goal_turn,
         )
         # 同一 session 的写入、压缩和命令操作必须按顺序执行。
         self._session_locks: dict[str, asyncio.Lock] = {}
         # 普通 turn 在真正开始前就登记，保证紧随其后的 /stop 也能取消它。
         self._active_turn_tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        # source=goal 的内部 turn 在执行期间独占目标模式；/goal 控制命令可据此绕过 session lock。
+        self._goal_turn_tasks: dict[str, asyncio.Task[Any]] = {}
         self._inbound_tasks: set[asyncio.Task[None]] = set()
         self._compaction_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -128,6 +130,9 @@ class AgentLoop:
                 if self._command_router.is_stop_command(invocation):
                     # /stop 不能等待当前 session 的锁，否则无法停止正在运行的 turn。
                     await self._handle_stop(inbound, invocation)
+                elif self._is_goal_control_command(inbound, invocation):
+                    # 目标执行期间，/goal 查询、创建和停止也不能被目标 turn 持有的锁阻塞。
+                    await self._handle_goal_command(inbound, invocation)
                 else:
                     # MessageBus 已是入站队列；非 /stop 消息由统一处理器异步消费。
                     self._enqueue_message(inbound, invocation)
@@ -149,6 +154,7 @@ class AgentLoop:
         tasks.update(self._inbound_tasks)
         for turn_tasks in self._active_turn_tasks.values():
             tasks.update(turn_tasks)
+        tasks.update(self._goal_turn_tasks.values())
         current_task = asyncio.current_task()
         tasks.discard(current_task)
         for task in tasks:
@@ -159,6 +165,7 @@ class AgentLoop:
             await self._memory_events.close()
         self._inbound_tasks.clear()
         self._active_turn_tasks.clear()
+        self._goal_turn_tasks.clear()
 
     async def wait_for_compactions(self) -> None:
         """Wait until currently scheduled background compactions have completed."""
@@ -194,6 +201,22 @@ class AgentLoop:
             response = _error_outbound_message(inbound)
         await self._message_bus.publish_outbound(response)
 
+    async def _handle_goal_command(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation,
+    ) -> None:
+        """Run a goal control command without waiting for its running goal turn."""
+
+        try:
+            response = await self._run_goal_command(inbound, invocation)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Agent loop failed while handling /goal during goal mode")
+            response = _error_outbound_message(inbound)
+        await self._message_bus.publish_outbound(response)
+
     def _enqueue_message(
         self,
         inbound: InboundMessage,
@@ -210,6 +233,11 @@ class AgentLoop:
                 _session_key(inbound.channel, inbound.chat_id, inbound.session_id),
                 task,
             )
+            if _is_goal_message(inbound):
+                self._track_goal_turn_task(
+                    _session_key(inbound.channel, inbound.chat_id, inbound.session_id),
+                    task,
+                )
 
     async def _process_queued_message(
         self,
@@ -251,6 +279,28 @@ class AgentLoop:
             )
         )
 
+    async def _run_goal_command(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation,
+    ) -> OutboundMessage:
+        """Route a goal control command using persisted state without taking its lock."""
+
+        session_key = _session_key(
+            inbound.channel,
+            inbound.chat_id,
+            inbound.session_id,
+        )
+        session = self._session_manager.get_or_create(session_key)
+        return _require_command_reply(
+            await self._command_router.route(
+                inbound,
+                session_key,
+                session,
+                invocation,
+            )
+        )
+
     async def _dispatch_non_stop_message(
         self,
         inbound: InboundMessage,
@@ -285,12 +335,15 @@ class AgentLoop:
         inbound: InboundMessage,
         session_key: str,
     ) -> OutboundMessage:
-        """Persist one user message, run it, then persist the completed history."""
+        """Run one turn and persist its completed message sequence."""
 
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("AgentLoop requires a running asyncio task")
+        is_goal_turn = _is_goal_message(inbound)
         self._track_turn_task(session_key, task)
+        if is_goal_turn:
+            self._track_goal_turn_task(session_key, task)
         try:
             # 锁覆盖“读取历史 -> 请求模型 -> 保存结果”，防止同一会话交错写入。
             async with self._lock_for(session_key):
@@ -307,15 +360,13 @@ class AgentLoop:
                     )
                 except ContextWindowExceededError:
                     logger.warning("Agent request exceeds the configured context window")
+                    if is_goal_turn:
+                        self._finish_active_goal(session_key, "failed")
                     return _outbound_message(
                         inbound,
                         _CONTEXT_WINDOW_EXCEEDED_MESSAGE,
                     )
 
-                # 先保存本轮用户消息；模型调用失败时也不会丢失已开始的对话。
-                session = self._session_manager.save(
-                    session.with_messages((*history, current_message))
-                )
                 spec = AgentRunSpec(
                     messages=request_messages,
                     provider=self._provider,
@@ -333,22 +384,39 @@ class AgentLoop:
                 completed_messages = _without_system_messages(
                     result.messages[len(spec.messages) :]
                 )
-                completed_session = session.with_messages(
+                latest_session = self._session_manager.get_or_create(session_key)
+                completed_session = latest_session.with_messages(
                     (
-                        *session.messages,
+                        *history,
+                        current_message,
                         *completed_messages,
                     )
                 )
+                if is_goal_turn:
+                    completed_session = self._finish_active_goal_state(
+                        completed_session,
+                        "completed",
+                    )
                 self._session_manager.save(completed_session)
                 # 事件只包含已成功保存的本轮快照，绝不直接引用可继续变化的 Session。
                 memory_snapshot = (current_message, *completed_messages)
-                if _is_memory_eligible(inbound.content, inbound.metadata) and self._memory_events is not None:
+                if self._memory_events is not None:
                     self._memory_events.append(session_key, memory_snapshot)
                 # 摘要在后台执行，不能延迟当前用户回复。
                 self._schedule_compaction(session_key)
                 return _outbound_message(inbound, result.content or "")
+        except asyncio.CancelledError:
+            if is_goal_turn:
+                self._finish_active_goal(session_key, "failed")
+            raise
+        except Exception:
+            if is_goal_turn:
+                self._finish_active_goal(session_key, "failed")
+            raise
         finally:
             self._untrack_turn_task(session_key, task)
+            if is_goal_turn:
+                self._untrack_goal_turn_task(session_key, task)
 
     def _schedule_compaction(self, session_key: str) -> None:
         if self._session_compactor is None or self._closed:
@@ -385,6 +453,17 @@ class AgentLoop:
             lambda completed_task: self._untrack_turn_task(session_key, completed_task)
         )
 
+    def _track_goal_turn_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
+        if self._goal_turn_tasks.get(session_key) is task:
+            return
+        self._goal_turn_tasks[session_key] = task
+        task.add_done_callback(
+            lambda completed_task: self._untrack_goal_turn_task(
+                session_key,
+                completed_task,
+            )
+        )
+
     def _untrack_turn_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
         tasks = self._active_turn_tasks.get(session_key)
         if tasks is None:
@@ -392,6 +471,14 @@ class AgentLoop:
         tasks.discard(task)
         if not tasks:
             self._active_turn_tasks.pop(session_key, None)
+
+    def _untrack_goal_turn_task(
+        self,
+        session_key: str,
+        task: asyncio.Task[Any],
+    ) -> None:
+        if self._goal_turn_tasks.get(session_key) is task:
+            self._goal_turn_tasks.pop(session_key, None)
 
     def _cancel_active_turn(self, session_key: str) -> bool:
         current_task = asyncio.current_task()
@@ -407,6 +494,48 @@ class AgentLoop:
         if active_tasks:
             logger.info("Cancelling active agent turns (count=%d)", len(active_tasks))
         return bool(active_tasks)
+
+    def _cancel_goal_turn(self, session_key: str) -> bool:
+        task = self._goal_turn_tasks.get(session_key)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        logger.info("Cancelling active goal turn")
+        return True
+
+    def _is_goal_control_command(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation | None,
+    ) -> bool:
+        if not self._command_router.is_goal_command(invocation):
+            return False
+        session_key = _session_key(inbound.channel, inbound.chat_id, inbound.session_id)
+        return self._is_goal_mode(session_key)
+
+    def _is_goal_mode(self, session_key: str) -> bool:
+        task = self._goal_turn_tasks.get(session_key)
+        return task is not None and not task.done()
+
+    def _finish_active_goal(
+        self,
+        session_key: str,
+        status: Literal["completed", "failed"],
+    ) -> None:
+        session = self._session_manager.get_or_create(session_key)
+        updated_session = self._finish_active_goal_state(session, status)
+        if updated_session is not session:
+            self._session_manager.save(updated_session)
+
+    @staticmethod
+    def _finish_active_goal_state(
+        session: Session,
+        status: Literal["completed", "failed"],
+    ) -> Session:
+        goal = session.goal_state
+        if goal is None or goal.status != "active":
+            return session
+        return session.with_goal_state(goal.finish(status))
 
 
 def _session_key(channel: str, chat_id: str, session_id: str) -> str:
@@ -441,13 +570,5 @@ def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMes
     return tuple(message for message in messages if not isinstance(message, SystemMessage))
 
 
-def _is_memory_eligible(content: str, metadata: Mapping[str, Any] | None) -> bool:
-    if content.lstrip().startswith("/"):
-        return False
-    if metadata is None:
-        return True
-    if metadata.get("ephemeral") is True or metadata.get("is_ephemeral") is True:
-        return False
-    if metadata.get("message_type") == "system" or metadata.get("role") == "system":
-        return False
-    return metadata.get("source") != "memory_consolidator"
+def _is_goal_message(inbound: InboundMessage) -> bool:
+    return inbound.metadata.get("source") == "goal"

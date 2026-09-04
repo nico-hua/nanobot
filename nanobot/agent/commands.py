@@ -48,6 +48,7 @@ class CommandContext:
     memory_store: MemoryStore | None
     subagent_manager: SubagentManager | None
     cancel_active_turn: Callable[[], bool]
+    cancel_goal_turn: Callable[[], bool]
 
 
 CommandHandler = Callable[[CommandContext], Awaitable[str]]
@@ -73,6 +74,7 @@ class CommandRouter:
         message_bus: MessageBus | None = None,
         memory_output_limit: int = DEFAULT_MEMORY_OUTPUT_LIMIT,
         cancel_active_turn: Callable[[str], bool] | None = None,
+        cancel_goal_turn: Callable[[str], bool] | None = None,
     ) -> None:
         if not isinstance(session_manager, SessionManager):
             raise TypeError("CommandRouter requires a SessionManager")
@@ -100,6 +102,7 @@ class CommandRouter:
         self._message_bus = message_bus
         self._memory_output_limit = memory_output_limit
         self._cancel_active_turn = cancel_active_turn or (lambda _session_key: False)
+        self._cancel_goal_turn = cancel_goal_turn or (lambda _session_key: False)
         self._commands: dict[str, _RegisteredCommand] = {}
         self.register("new", "清空当前会话的短期历史。", self._handle_new)
         self.register("stop", "停止当前会话正在执行的请求。", self._handle_stop)
@@ -167,6 +170,11 @@ class CommandRouter:
 
         return invocation is not None and invocation.name == "stop"
 
+    def is_goal_command(self, invocation: CommandInvocation | None) -> bool:
+        """Return whether an invocation controls the current session goal."""
+
+        return invocation is not None and invocation.name == "goal"
+
     async def route(
         self,
         message: InboundMessage,
@@ -211,6 +219,7 @@ class CommandRouter:
             memory_store=self._memory_store,
             subagent_manager=self._subagent_manager,
             cancel_active_turn=lambda: self._cancel_active_turn(session_key),
+            cancel_goal_turn=lambda: self._cancel_goal_turn(session_key),
         )
         try:
             content = await registered.handler(context)
@@ -260,6 +269,7 @@ class CommandRouter:
                 return f"当前目标已处于 {current.status} 状态。"
             stopped = current.finish("cancelled")
             context.session_manager.save(session.with_goal_state(stopped))
+            context.cancel_goal_turn()
             return f"已停止目标：{stopped.objective}"
 
         objective = " ".join(arguments).strip()

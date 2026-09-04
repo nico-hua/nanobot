@@ -468,7 +468,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_runner_failure_keeps_existing_history_and_the_saved_user_message(self) -> None:
+    async def test_runner_failure_keeps_existing_history_without_saving_current_user_message(self) -> None:
         previous_history = (HumanMessage(content="Previous question."),)
         self._sessions.save(
             self._sessions.get_or_create("session-1").with_messages(previous_history)
@@ -487,7 +487,7 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             self._sessions.get_or_create("session-1").messages,
-            (*previous_history, HumanMessage(content="New question.")),
+            previous_history,
         )
         self.assertEqual(
             runner.received_spec.messages if runner.received_spec is not None else None,
@@ -1191,51 +1191,6 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
         run_task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await run_task
-
-    async def test_skips_memory_consolidation_for_non_normal_user_messages(self) -> None:
-        provider = BackgroundMemoryProvider(
-            (
-                LLMResponse(content="Ephemeral answer."),
-                LLMResponse(content="System answer."),
-                LLMResponse(content="Command answer."),
-            ),
-            LLMResponse(content="unused"),
-        )
-        store = MemoryStore(self._temporary_directory.name)
-        loop = AgentLoop(
-            AgentRunner(),
-            provider,
-            ToolRegistry(),
-            self._sessions,
-            _context_builder(self._temporary_directory.name),
-            memory_store=store,
-            memory_consolidator=MemoryConsolidator(
-                provider,
-                store,
-            ),
-        )
-
-        await _dispatch(
-            loop,
-            "Ephemeral question.",
-            "test",
-            "chat-1",
-            "session-1",
-            {"ephemeral": True},
-        )
-        await _dispatch(
-            loop,
-            "System question.",
-            "test",
-            "chat-2",
-            "session-2",
-            {"message_type": "system"},
-        )
-        await _dispatch(loop, "/help", "test", "chat-3", "session-3")
-        await asyncio.sleep(0)
-
-        self.assertEqual(provider.memory_requests, [])
-        self.assertEqual(store.read_events_after(0), ())
 
     async def test_cron_message_uses_session_context_and_persists(self) -> None:
         provider = ScriptedProvider(
