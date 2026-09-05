@@ -14,7 +14,7 @@ from ..session.goals import build_goal_continuation_content
 from ..tools import RequestContext, ToolRegistry, bind_request_context
 from .commands import CommandInvocation, CommandRouter
 from .context import ContextBuilder, ContextWindowExceededError
-from .runner import AgentRunner, AgentRunSpec
+from .runner import AgentRunner, AgentRunResult, AgentRunSpec
 
 if TYPE_CHECKING:
     from ..subagent import SubagentManager
@@ -167,30 +167,30 @@ class AgentLoop:
                     inbound.chat_id,
                     inbound.session_id,
                 )
-                # 目标运行期间AgentRunner达到最大迭代次数后系统追加继续执行消息
-                if _is_goal_continuation_message(inbound):
-                    # Continuations carry an explicit internal marker, so their
-                    # routing does not depend on the timing of task cleanup.
-                    self._start_goal_continuation(inbound, session_key)
-                # 目标运行期间用户追加消息
-                elif self._should_queue_goal_user_message(
+                if self._command_router.is_stop_command(invocation):
+                    # /stop 不能等待当前 session 的锁，否则无法停止正在运行的 turn。
+                    await self._publish_immediate_command(
+                        inbound,
+                        invocation,
+                        session=None,
+                        operation="/stop",
+                    )
+                    continue
+                if self._is_goal_mode_message(
                     inbound,
                     invocation,
                     session_key,
                 ):
-                    self._queue_goal_user_message(session_key, inbound)
-                # /stop 命令
-                elif self._command_router.is_stop_command(invocation):
-                    # /stop 不能等待当前 session 的锁，否则无法停止正在运行的 turn。
-                    await self._handle_stop(inbound, invocation)
-                # 目标运行期间/goal相关命令
-                elif self._is_goal_control_command(inbound, invocation):
-                    # 目标执行期间，/goal 查询、创建和停止也不能被目标 turn 持有的锁阻塞。
-                    await self._handle_goal_command(inbound, invocation)
-                # 其他
-                else:
-                    # MessageBus 已是入站队列；非 /stop 消息由统一处理器异步消费。
-                    self._enqueue_message(inbound, invocation)
+                    await self._handle_goal_mode_message(
+                        inbound,
+                        invocation,
+                        session_key,
+                    )
+                    continue
+
+                # MessageBus is the inbound queue; remaining messages are
+                # handled asynchronously and remain cancellable by /stop.
+                self._enqueue_message(inbound, invocation)
         except asyncio.CancelledError:
             logger.info("Agent loop cancelled")
             await self.close()
@@ -241,36 +241,27 @@ class AgentLoop:
 
     # -- MessageBus queue -------------------------------------------------
 
-    async def _handle_stop(
+    async def _publish_immediate_command(
         self,
         inbound: InboundMessage,
         invocation: CommandInvocation,
+        *,
+        session: Session | None,
+        operation: str,
     ) -> None:
-        """Cancel the current session turn and publish only the stop command reply."""
+        """Route and publish a command that must bypass the session lock."""
 
         try:
-            response = await self._run_stop_command(inbound, invocation)
+            response = await self._route_command(inbound, invocation, session)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Agent loop failed while handling /stop")
-            response = _error_outbound_message(inbound)
-        await self._message_bus.publish_outbound(response)
+            logger.exception("Agent loop failed while handling %s", operation)
+            response = _outbound_message(inbound, _PROCESSING_ERROR_MESSAGE)
 
-    async def _handle_goal_command(
-        self,
-        inbound: InboundMessage,
-        invocation: CommandInvocation,
-    ) -> None:
-        """Run a goal control command without waiting for its running goal turn."""
-
-        try:
-            response = await self._run_goal_command(inbound, invocation)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Agent loop failed while handling /goal during goal mode")
-            response = _error_outbound_message(inbound)
+        # Only ``run`` calls this method, after it has established the bus.
+        if self._message_bus is None:
+            raise RuntimeError("AgentLoop requires a MessageBus to publish a command")
         await self._message_bus.publish_outbound(response)
 
     def _enqueue_message(
@@ -280,18 +271,19 @@ class AgentLoop:
     ) -> None:
         """Schedule one non-stop queue item while making normal turns stoppable."""
 
+        session_key = _session_key(inbound.channel, inbound.chat_id, inbound.session_id)
         task = asyncio.create_task(self._process_queued_message(inbound, invocation))
         self._inbound_tasks.add(task)
         task.add_done_callback(self._inbound_tasks.discard)
         if invocation is None:
             # 在 task 获得运行机会前先登记，处理“普通消息后立刻收到 /stop”的竞态。
             self._track_turn_task(
-                _session_key(inbound.channel, inbound.chat_id, inbound.session_id),
+                session_key,
                 task,
             )
             if _is_goal_message(inbound):
                 self._track_goal_turn_task(
-                    _session_key(inbound.channel, inbound.chat_id, inbound.session_id),
+                    session_key,
                     task,
                 )
 
@@ -309,7 +301,7 @@ class AgentLoop:
         except Exception:
             # 单条消息失败不应终止持续运行的总线消费循环。
             logger.exception("Agent loop failed while processing an inbound message")
-            response = _error_outbound_message(inbound)
+            response = _outbound_message(inbound, _PROCESSING_ERROR_MESSAGE)
         if response is not None:
             await self._message_bus.publish_outbound(response)
 
@@ -322,33 +314,17 @@ class AgentLoop:
     ) -> OutboundMessage:
         """Run the one command that must not wait for the session lock."""
 
-        session_key = _session_key(
-            inbound.channel,
-            inbound.chat_id,
-            inbound.session_id,
-        )
-        return _require_command_reply(
-            await self._command_router.route(
-                inbound,
-                session_key,
-                None,
-                invocation,
-            )
-        )
+        return await self._route_command(inbound, invocation, session=None)
 
-    async def _run_goal_command(
+    async def _route_command(
         self,
         inbound: InboundMessage,
         invocation: CommandInvocation,
+        session: Session | None,
     ) -> OutboundMessage:
-        """Route a goal control command using persisted state without taking its lock."""
+        """Route a parsed command with the caller-selected session locking policy."""
 
-        session_key = _session_key(
-            inbound.channel,
-            inbound.chat_id,
-            inbound.session_id,
-        )
-        session = self._session_manager.get_or_create(session_key)
+        session_key = _session_key(inbound.channel, inbound.chat_id, inbound.session_id)
         return _require_command_reply(
             await self._command_router.route(
                 inbound,
@@ -376,14 +352,7 @@ class AgentLoop:
         # 队列中的命令都不是 /stop；它们会读取或修改 Session，必须与普通 turn 串行化。
         async with self._lock_for(session_key):
             session = self._session_manager.get_or_create(session_key)
-            return _require_command_reply(
-                await self._command_router.route(
-                    inbound,
-                    session_key,
-                    session,
-                    invocation,
-                )
-            )
+            return await self._route_command(inbound, invocation, session)
 
     # -- Normal Agent turn ------------------------------------------------
 
@@ -462,31 +431,14 @@ class AgentLoop:
                 completed_messages = _without_system_messages(
                     result.messages[len(spec.messages) :]
                 )
-                latest_session = self._session_manager.get_or_create(session_key)
-                completed_session = latest_session.with_messages(
-                    (
-                        *history,
-                        current_message,
-                        *completed_messages,
-                    )
+                saved_session = self._persist_completed_turn(
+                    session_key,
+                    history,
+                    current_message,
+                    completed_messages,
+                    is_goal_turn=is_goal_turn,
+                    result=result,
                 )
-                if is_goal_turn and result.stop_reason != "max_iterations":
-                    goal_status: Literal["completed", "failed"] = (
-                        "completed"
-                        if result.content is not None and result.content.strip()
-                        else "failed"
-                    )
-                    completed_session = self._finish_active_goal_state(
-                        completed_session,
-                        goal_status,
-                    )
-                saved_session = self._session_manager.save(completed_session)
-                # 事件只包含已成功保存的本轮快照，绝不直接引用可继续变化的 Session。
-                memory_snapshot = (current_message, *completed_messages)
-                if self._memory_events is not None:
-                    self._memory_events.append(session_key, memory_snapshot)
-                # 摘要在后台执行，不能延迟当前用户回复。
-                self._schedule_compaction(session_key)
                 if is_goal_turn and result.stop_reason == "max_iterations":
                     return await self._schedule_goal_continuation(
                         inbound,
@@ -508,6 +460,42 @@ class AgentLoop:
             self._untrack_turn_task(session_key, task)
             if is_goal_turn:
                 self._untrack_goal_turn_task(session_key, task)
+
+    def _persist_completed_turn(
+        self,
+        session_key: str,
+        history: tuple[BaseMessage, ...],
+        current_message: HumanMessage,
+        completed_messages: tuple[BaseMessage, ...],
+        *,
+        is_goal_turn: bool,
+        result: AgentRunResult,
+    ) -> Session:
+        """Save one complete runner result, then trigger post-save work."""
+
+        # A session is only changed after AgentRunner has returned a complete
+        # assistant/tool sequence.  This keeps cancellation from persisting a
+        # partial tool-call batch.
+        session = self._session_manager.get_or_create(session_key).with_messages(
+            (*history, current_message, *completed_messages)
+        )
+        if is_goal_turn and result.stop_reason != "max_iterations":
+            status: Literal["completed", "failed"] = (
+                "completed"
+                if result.content is not None and result.content.strip()
+                else "failed"
+            )
+            session = self._finish_active_goal_state(session, status)
+
+        saved_session = self._session_manager.save(session)
+        if self._memory_events is not None:
+            self._memory_events.append(
+                session_key,
+                (current_message, *completed_messages),
+            )
+        # Compaction is deliberately asynchronous so it cannot delay a reply.
+        self._schedule_compaction(session_key)
+        return saved_session
 
     def _schedule_compaction(self, session_key: str) -> None:
         if self._session_compactor is None or self._closed:
@@ -585,19 +573,50 @@ class AgentLoop:
             return
         self._enqueue_message(inbound, None)
 
-    def _should_queue_goal_user_message(
+    def _is_goal_mode_message(
         self,
         inbound: InboundMessage,
         invocation: CommandInvocation | None,
         session_key: str,
     ) -> bool:
-        """Accept only external plain text while a goal Runner owns the session."""
+        """Return whether a message has special handling during goal execution."""
 
+        if _is_goal_continuation_message(inbound):
+            return True
+        if invocation is None:
+            return (
+                not _is_goal_message(inbound)
+                and inbound.metadata.get("source") is None
+                and self._is_goal_mode(session_key)
+            )
         return (
-            invocation is None
-            and not _is_goal_message(inbound)
-            and inbound.metadata.get("source") is None
+            self._command_router.is_goal_command(invocation)
             and self._is_goal_mode(session_key)
+        )
+
+    async def _handle_goal_mode_message(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation | None,
+        session_key: str,
+    ) -> None:
+        """Execute the goal-specific path selected by ``_is_goal_mode_message``."""
+
+        # A continuation is consumed even when stale, so it is never treated
+        # as ordinary user input.
+        if _is_goal_continuation_message(inbound):
+            self._start_goal_continuation(inbound, session_key)
+            return
+        if invocation is None:
+            self._queue_goal_user_message(session_key, inbound)
+            return
+
+        # Goal commands bypass the session lock held by the active goal turn.
+        await self._publish_immediate_command(
+            inbound,
+            invocation,
+            session=self._session_manager.get_or_create(session_key),
+            operation="/goal during goal mode",
         )
 
     def _queue_goal_user_message(
@@ -656,24 +675,11 @@ class AgentLoop:
         logger.info("Cancelling active goal turn")
         return True
 
-    def _is_goal_control_command(
-        self,
-        inbound: InboundMessage,
-        invocation: CommandInvocation | None,
-    ) -> bool:
-        if not self._command_router.is_goal_command(invocation):
-            return False
-        session_key = _session_key(inbound.channel, inbound.chat_id, inbound.session_id)
-        return self._is_goal_mode(session_key)
-
     def _is_goal_mode(self, session_key: str) -> bool:
-        return self._has_running_goal_turn(session_key) or self._has_active_goal(
+        task = self._goal_turn_tasks.get(session_key)
+        return (task is not None and not task.done()) or self._has_active_goal(
             session_key
         )
-
-    def _has_running_goal_turn(self, session_key: str) -> bool:
-        task = self._goal_turn_tasks.get(session_key)
-        return task is not None and not task.done()
 
     def _has_active_goal(self, session_key: str) -> bool:
         goal = self._session_manager.get_or_create(session_key).goal_state
@@ -768,11 +774,6 @@ def _outbound_message(
         content=content,
         metadata=inbound.metadata,
     )
-
-
-def _error_outbound_message(inbound: InboundMessage) -> OutboundMessage:
-    return _outbound_message(inbound, _PROCESSING_ERROR_MESSAGE)
-
 
 def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMessage, ...]:
     return tuple(message for message in messages if not isinstance(message, SystemMessage))
