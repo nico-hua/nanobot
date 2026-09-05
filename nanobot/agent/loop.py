@@ -10,6 +10,7 @@ from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryConsolidator, MemoryEventConsumer, MemoryStore
 from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
 from ..session import Session, SessionCompactor, SessionManager
+from ..session.goals import build_goal_continuation_content
 from ..tools import RequestContext, ToolRegistry, bind_request_context
 from .commands import CommandInvocation, CommandRouter
 from .context import ContextBuilder, ContextWindowExceededError
@@ -25,6 +26,14 @@ _CONTEXT_WINDOW_EXCEEDED_MESSAGE = (
     "请新开会话或缩短消息后重试。"
 )
 _PROCESSING_ERROR_MESSAGE = "处理消息时发生错误，请稍后重试。"
+_MAX_ITERATIONS_MESSAGE = "该智能体在完成此请求之前达到了迭代次数上限。"
+_GOAL_CONTINUATION_LIMIT_MESSAGE = (
+    "该目标达到了自动延续限制，并被标记为失败。"
+)
+_GOAL_CONTINUATION_UNAVAILABLE_MESSAGE = (
+    "该目标无法继续，并被标记为失败。"
+)
+DEFAULT_MAX_GOAL_CONTINUATIONS = 10
 _GOAL_INJECTION_TEMPLATE = """[New user input during goal execution]
 
 The user sent the following new input while the active goal is running:
@@ -33,8 +42,7 @@ The user sent the following new input while the active goal is running:
 
 Continue the active goal while incorporating this input. If changing or stopping the
 goal is necessary, use the update_goal tool with action update or stop.
-
-[/New user input]"""
+"""
 
 
 class AgentLoop:
@@ -53,6 +61,8 @@ class AgentLoop:
         memory_consolidator: MemoryConsolidator | None = None,
         command_router: CommandRouter | None = None,
         subagent_manager: SubagentManager | None = None,
+        max_iterations: int = 30,
+        max_goal_continuations: int = DEFAULT_MAX_GOAL_CONTINUATIONS,
     ) -> None:
         if not isinstance(runner, AgentRunner):
             raise TypeError("AgentLoop requires an AgentRunner")
@@ -84,6 +94,17 @@ class AgentLoop:
             )
         if command_router is not None and not isinstance(command_router, CommandRouter):
             raise TypeError("AgentLoop command_router must be a CommandRouter")
+        if not isinstance(max_iterations, int) or isinstance(max_iterations, bool):
+            raise TypeError("AgentLoop max_iterations must be an integer")
+        if max_iterations <= 0:
+            raise ValueError("AgentLoop max_iterations must be positive")
+        if not isinstance(max_goal_continuations, int) or isinstance(
+            max_goal_continuations,
+            bool,
+        ):
+            raise TypeError("AgentLoop max_goal_continuations must be an integer")
+        if max_goal_continuations < 0:
+            raise ValueError("AgentLoop max_goal_continuations must not be negative")
 
         self._runner = runner
         self._provider = provider
@@ -98,6 +119,8 @@ class AgentLoop:
             else None
         )
         self._subagent_manager = subagent_manager
+        self._max_iterations = max_iterations
+        self._max_goal_continuations = max_goal_continuations
         self._command_router = command_router or CommandRouter(
             session_manager,
             session_compactor=session_compactor,
@@ -144,18 +167,27 @@ class AgentLoop:
                     inbound.chat_id,
                     inbound.session_id,
                 )
-                if self._should_queue_goal_user_message(
+                # 目标运行期间AgentRunner达到最大迭代次数后系统追加继续执行消息
+                if _is_goal_continuation_message(inbound):
+                    # Continuations carry an explicit internal marker, so their
+                    # routing does not depend on the timing of task cleanup.
+                    self._start_goal_continuation(inbound, session_key)
+                # 目标运行期间用户追加消息
+                elif self._should_queue_goal_user_message(
                     inbound,
                     invocation,
                     session_key,
                 ):
                     self._queue_goal_user_message(session_key, inbound)
+                # /stop 命令
                 elif self._command_router.is_stop_command(invocation):
                     # /stop 不能等待当前 session 的锁，否则无法停止正在运行的 turn。
                     await self._handle_stop(inbound, invocation)
+                # 目标运行期间/goal相关命令
                 elif self._is_goal_control_command(inbound, invocation):
                     # 目标执行期间，/goal 查询、创建和停止也不能被目标 turn 持有的锁阻塞。
                     await self._handle_goal_command(inbound, invocation)
+                # 其他
                 else:
                     # MessageBus 已是入站队列；非 /stop 消息由统一处理器异步消费。
                     self._enqueue_message(inbound, invocation)
@@ -278,7 +310,8 @@ class AgentLoop:
             # 单条消息失败不应终止持续运行的总线消费循环。
             logger.exception("Agent loop failed while processing an inbound message")
             response = _error_outbound_message(inbound)
-        await self._message_bus.publish_outbound(response)
+        if response is not None:
+            await self._message_bus.publish_outbound(response)
 
     # -- Message dispatch -------------------------------------------------
 
@@ -329,7 +362,7 @@ class AgentLoop:
         self,
         inbound: InboundMessage,
         invocation: CommandInvocation | None,
-    ) -> OutboundMessage:
+    ) -> OutboundMessage | None:
         """Route a non-stop message to CommandRouter or AgentRunner."""
 
         session_key = _session_key(
@@ -358,13 +391,19 @@ class AgentLoop:
         self,
         inbound: InboundMessage,
         session_key: str,
-    ) -> OutboundMessage:
+    ) -> OutboundMessage | None:
         """Run one turn and persist its completed message sequence."""
 
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("AgentLoop requires a running asyncio task")
         is_goal_turn = _is_goal_message(inbound)
+        if is_goal_turn and not self._has_active_goal(session_key):
+            # A new /goal persists its active GoalState before publishing this
+            # message. Therefore this only rejects stale source=goal messages
+            # after a completed, cancelled, or failed goal.
+            logger.info("Ignoring goal turn because its goal is no longer active")
+            return None
         self._track_turn_task(session_key, task)
         if is_goal_turn:
             self._track_goal_turn_task(session_key, task)
@@ -401,6 +440,7 @@ class AgentLoop:
                     messages=request_messages,
                     provider=self._provider,
                     tool_registry=self._tool_registry,
+                    max_iterations=self._max_iterations,
                     blocked_tool_names=blocked_tool_names,
                     is_goal_mode=is_goal_turn,
                     injection_callback=(
@@ -430,18 +470,31 @@ class AgentLoop:
                         *completed_messages,
                     )
                 )
-                if is_goal_turn:
+                if is_goal_turn and result.stop_reason != "max_iterations":
+                    goal_status: Literal["completed", "failed"] = (
+                        "completed"
+                        if result.content is not None and result.content.strip()
+                        else "failed"
+                    )
                     completed_session = self._finish_active_goal_state(
                         completed_session,
-                        "completed",
+                        goal_status,
                     )
-                self._session_manager.save(completed_session)
+                saved_session = self._session_manager.save(completed_session)
                 # 事件只包含已成功保存的本轮快照，绝不直接引用可继续变化的 Session。
                 memory_snapshot = (current_message, *completed_messages)
                 if self._memory_events is not None:
                     self._memory_events.append(session_key, memory_snapshot)
                 # 摘要在后台执行，不能延迟当前用户回复。
                 self._schedule_compaction(session_key)
+                if is_goal_turn and result.stop_reason == "max_iterations":
+                    return await self._schedule_goal_continuation(
+                        inbound,
+                        session_key,
+                        saved_session,
+                    )
+                if result.stop_reason == "max_iterations":
+                    return _outbound_message(inbound, _MAX_ITERATIONS_MESSAGE)
                 return _outbound_message(inbound, result.content or "")
         except asyncio.CancelledError:
             if is_goal_turn:
@@ -517,7 +570,20 @@ class AgentLoop:
     ) -> None:
         if self._goal_turn_tasks.get(session_key) is task:
             self._goal_turn_tasks.pop(session_key, None)
-            self._pending_user_messages.pop(session_key, None)
+            if not self._has_active_goal(session_key):
+                self._pending_user_messages.pop(session_key, None)
+
+    def _start_goal_continuation(
+        self,
+        inbound: InboundMessage,
+        session_key: str,
+    ) -> None:
+        """Schedule a continuation without treating it as user input."""
+
+        if not self._has_active_goal(session_key):
+            logger.info("Ignoring stale internal goal message")
+            return
+        self._enqueue_message(inbound, None)
 
     def _should_queue_goal_user_message(
         self,
@@ -601,8 +667,63 @@ class AgentLoop:
         return self._is_goal_mode(session_key)
 
     def _is_goal_mode(self, session_key: str) -> bool:
+        return self._has_running_goal_turn(session_key) or self._has_active_goal(
+            session_key
+        )
+
+    def _has_running_goal_turn(self, session_key: str) -> bool:
         task = self._goal_turn_tasks.get(session_key)
         return task is not None and not task.done()
+
+    def _has_active_goal(self, session_key: str) -> bool:
+        goal = self._session_manager.get_or_create(session_key).goal_state
+        return goal is not None and goal.status == "active"
+
+    async def _schedule_goal_continuation(
+        self,
+        inbound: InboundMessage,
+        session_key: str,
+        session: Session,
+    ) -> OutboundMessage | None:
+        """Persist and queue one later goal turn after a completed tool boundary."""
+
+        goal = session.goal_state
+        if goal is None or goal.status != "active":
+            return None
+        if goal.continuation_count >= self._max_goal_continuations:
+            self._finish_active_goal(session_key, "failed")
+            return _outbound_message(inbound, _GOAL_CONTINUATION_LIMIT_MESSAGE)
+        if self._message_bus is None:
+            self._finish_active_goal(session_key, "failed")
+            return _outbound_message(inbound, _GOAL_CONTINUATION_UNAVAILABLE_MESSAGE)
+
+        continued_session = self._session_manager.save(
+            session.with_goal_state(goal.record_continuation())
+        )
+        continued_goal = continued_session.goal_state
+        if continued_goal is None:
+            raise RuntimeError("Continuing a goal must retain its goal state")
+        continuation = InboundMessage(
+            channel=inbound.channel,
+            chat_id=inbound.chat_id,
+            sender_id=inbound.sender_id,
+            session_id=session_key,
+            content=build_goal_continuation_content(continued_goal.objective),
+            metadata={
+                **inbound.metadata,
+                "source": "goal",
+                "goal_continuation": True,
+            },
+        )
+        try:
+            await self._message_bus.publish_inbound(continuation)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Failed to schedule goal continuation")
+            self._finish_active_goal(session_key, "failed")
+            return _outbound_message(inbound, _GOAL_CONTINUATION_UNAVAILABLE_MESSAGE)
+        return None
 
     def _finish_active_goal(
         self,
@@ -659,6 +780,13 @@ def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMes
 
 def _is_goal_message(inbound: InboundMessage) -> bool:
     return inbound.metadata.get("source") == "goal"
+
+
+def _is_goal_continuation_message(inbound: InboundMessage) -> bool:
+    return (
+        _is_goal_message(inbound)
+        and inbound.metadata.get("goal_continuation") is True
+    )
 
 
 def _blocked_tool_names(is_goal_mode: bool) -> tuple[str, ...]:

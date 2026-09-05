@@ -322,6 +322,9 @@ class SubagentManager:
         if not isinstance(result, AgentRunResult):
             logger.error("Subagent runner returned an invalid result")
             return SubagentRunResult(error="Subagent returned an invalid result.")
+        if result.stop_reason == "max_iterations":
+            logger.warning("Subagent run reached its iteration limit")
+            return SubagentRunResult(error="Subagent reached its iteration limit.")
         return SubagentRunResult(agent_result=result)
 
     async def _run_background(

@@ -30,3 +30,11 @@ class GoalStateTest(unittest.TestCase):
         self.assertGreaterEqual(failed.updated_at, state.updated_at)
         self.assertNotIn("recap", failed.to_dict())
         self.assertEqual(GoalState.from_dict(failed.to_dict()), failed)
+
+    def test_persists_continuation_count_and_defaults_old_goal_records_to_zero(self) -> None:
+        state = GoalState.create("Continue the migration.").record_continuation()
+
+        self.assertEqual(GoalState.from_dict(state.to_dict()), state)
+        old_record = state.to_dict()
+        old_record.pop("continuation_count")
+        self.assertEqual(GoalState.from_dict(old_record).continuation_count, 0)

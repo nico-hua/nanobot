@@ -321,6 +321,11 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
             runner=runner,
             tool_registry=registry,
         )
+        self._sessions.save(
+            self._sessions.get_or_create("session-goal").with_goal_state(
+                GoalState.create("Verify goal tool permissions.")
+            )
+        )
 
         await _dispatch(loop, "Normal turn.", "test", "chat-1", "session-normal")
         await _dispatch(

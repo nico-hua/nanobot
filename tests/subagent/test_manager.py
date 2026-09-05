@@ -249,6 +249,25 @@ class SubagentManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result.agent_result)
         self.assertEqual(result.error, "Subagent could not complete the task.")
 
+    async def test_returns_a_clear_error_when_the_runner_reaches_its_limit(self) -> None:
+        manager = self._manager(
+            RecordingRunner(
+                AgentRunResult(
+                    content=None,
+                    messages=(),
+                    tools_used=(),
+                    token_usage=None,
+                    stop_reason="max_iterations",
+                )
+            )
+        )
+
+        result = await manager.run("Stop at the iteration boundary.")
+
+        self.assertFalse(result.success)
+        self.assertIsNone(result.agent_result)
+        self.assertEqual(result.error, "Subagent reached its iteration limit.")
+
     async def test_background_task_publishes_its_result_to_the_original_route(self) -> None:
         bus = MessageBus()
         runner = BlockingRunner(_agent_result("Child result."))

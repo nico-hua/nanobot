@@ -79,7 +79,7 @@ class AgentRunSpec:
 
 @dataclass(frozen=True)
 class AgentRunResult:
-    """The final response and conversation state from one agent run."""
+    """The response boundary and conversation state from one agent run."""
 
     content: str | None
     messages: tuple[BaseMessage, ...]
@@ -89,10 +89,10 @@ class AgentRunResult:
 
 
 class AgentRunner:
-    """Run provider completions and sequential tool calls to a final response."""
+    """Run provider completions and sequential tool calls to a response boundary."""
 
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
-        """Run tool-call rounds until the provider returns a final response."""
+        """Run tool-call rounds until a final response or iteration boundary."""
 
         conversation = list(spec.messages)
         tools_used: list[ToolCallRequest] = []
@@ -173,9 +173,17 @@ class AgentRunner:
             # require every requested tool result before the next user message.
             conversation.extend(injected_messages)
 
-        logger.error("Agent run exceeded maximum iteration count (%d)", spec.max_iterations)
-        raise AgentRunnerError(
-            f"Agent exceeded the maximum iteration count: {spec.max_iterations}"
+        # Every tool-call batch above is complete at this point: each assistant
+        # tool request has its matching ToolMessage.  Return that durable
+        # boundary to the caller instead of raising, so a goal-mode caller can
+        # persist it before scheduling a later continuation.
+        logger.warning("Agent run reached maximum iteration count (%d)", spec.max_iterations)
+        return AgentRunResult(
+            content=None,
+            messages=tuple(conversation),
+            tools_used=tuple(tools_used),
+            token_usage=token_usage,
+            stop_reason="max_iterations",
         )
 
 

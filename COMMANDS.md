@@ -35,6 +35,10 @@ python -m nanobot [--config <path>] [--workspace <path>]
 | `/subagents status <task_id>` | 查看当前 session 指定后台任务的状态，并在可用时显示结果摘要或错误信息。 |
 | `/subagents cancel <task_id>` | 取消当前 session 中仍处于 `pending` 或 `running` 状态的后台任务。终态任务不能再次取消。 |
 
+### 目标自动续跑
+
+目标 turn 到达单次 `max_iterations` 上限时，系统会先保存已完成的 assistant/tool 消息批次，再投递内部 continuation 继续同一目标；中间结果不会直接发送给用户。每个目标有续跑次数上限，达到上限或无法投递 continuation 时会标记为 `failed`。模型只有返回非空、非纯空白的最终文本时，目标才会标记为 `completed`。
+
 ### 后台 Subagent 状态
 
 `/subagents` 相关任务仅在当前 Agent 进程内保存，应用重启后不会恢复。状态含义如下：

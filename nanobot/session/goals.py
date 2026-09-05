@@ -16,6 +16,13 @@ _GOAL_START_MESSAGE_TEMPLATE = (
     "Begin from the context saved in the current Session and use the available "
     "tools to make steady progress toward the goal."
 )
+_GOAL_CONTINUATION_MESSAGE_TEMPLATE = (
+    "Continue executing the current sustained goal.\n\n"
+    "Goal:\n"
+    "{objective}\n\n"
+    "Resume from the context saved in the current Session and use the available "
+    "tools to make steady progress toward completing the goal."
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +34,7 @@ class GoalState:
     created_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None
+    continuation_count: int = 0
 
     def __post_init__(self) -> None:
         if self.status not in {"active", "completed", "cancelled", "failed"}:
@@ -37,6 +45,13 @@ class GoalState:
         _validate_timestamp("updated_at", self.updated_at)
         if self.ended_at is not None:
             _validate_timestamp("ended_at", self.ended_at)
+        if not isinstance(self.continuation_count, int) or isinstance(
+            self.continuation_count,
+            bool,
+        ):
+            raise TypeError("Goal continuation_count must be an integer")
+        if self.continuation_count < 0:
+            raise ValueError("Goal continuation_count must not be negative")
         if self.status == "active":
             if self.ended_at is not None:
                 raise ValueError("An active goal cannot have ended_at")
@@ -67,9 +82,10 @@ class GoalState:
             created_at=_timestamp(value, "created_at"),
             updated_at=_timestamp(value, "updated_at"),
             ended_at=_optional_timestamp(value, "ended_at"),
+            continuation_count=_continuation_count(value),
         )
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict[str, str | int | None]:
         """Return a JSON-safe representation suitable for Session persistence."""
 
         return {
@@ -78,6 +94,7 @@ class GoalState:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "ended_at": self.ended_at.isoformat() if self.ended_at is not None else None,
+            "continuation_count": self.continuation_count,
         }
 
     def finish(self, status: GoalStatus) -> GoalState:
@@ -106,6 +123,17 @@ class GoalState:
             updated_at=datetime.now(timezone.utc),
         )
 
+    def record_continuation(self) -> GoalState:
+        """Return this active goal after one continuation was scheduled."""
+
+        if self.status != "active":
+            raise ValueError("Only an active goal can continue")
+        return replace(
+            self,
+            continuation_count=self.continuation_count + 1,
+            updated_at=datetime.now(timezone.utc),
+        )
+
 
 def build_goal_start_content(objective: str) -> str:
     """Build the internal instruction that starts work on a saved goal."""
@@ -113,6 +141,14 @@ def build_goal_start_content(objective: str) -> str:
     if not isinstance(objective, str) or not objective.strip():
         raise ValueError("Goal objective must be a non-empty string")
     return _GOAL_START_MESSAGE_TEMPLATE.format(objective=objective.strip())
+
+
+def build_goal_continuation_content(objective: str) -> str:
+    """Build the internal instruction that resumes an active goal."""
+
+    if not isinstance(objective, str) or not objective.strip():
+        raise ValueError("Goal objective must be a non-empty string")
+    return _GOAL_CONTINUATION_MESSAGE_TEMPLATE.format(objective=objective.strip())
 
 
 def _goal_status(value: object) -> GoalStatus:
@@ -148,6 +184,17 @@ def _optional_timestamp(value: Mapping[str, Any], name: str) -> datetime | None:
     if item is None:
         return None
     return _timestamp(value, name)
+
+
+def _continuation_count(value: Mapping[str, Any]) -> int:
+    """Read the optional count so sessions saved before this field still load."""
+
+    count = value.get("continuation_count", 0)
+    if not isinstance(count, int) or isinstance(count, bool):
+        raise TypeError("Goal state continuation_count must be an integer")
+    if count < 0:
+        raise ValueError("Goal state continuation_count must not be negative")
+    return count
 
 
 def _validate_timestamp(name: str, value: datetime) -> None:

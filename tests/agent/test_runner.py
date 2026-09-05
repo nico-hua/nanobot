@@ -6,7 +6,7 @@ import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-from nanobot.agent import AgentRunner, AgentRunnerError, AgentRunResult, AgentRunSpec
+from nanobot.agent import AgentRunner, AgentRunResult, AgentRunSpec
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -322,24 +322,33 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool_message.tool_call_id, "failure-1")
         self.assertIn("Tool execution failed: failing", tool_message.content)
 
-    async def test_raises_when_tool_calls_exceed_the_iteration_limit(self) -> None:
+    async def test_returns_completed_tool_batches_at_the_iteration_limit(self) -> None:
         provider = ScriptedProvider(
             (LLMResponse(tool_calls=(tool_call("call-1", "record", value="loop"),)),)
         )
         tool = RecordingTool()
 
-        with self.assertRaisesRegex(
-            AgentRunnerError,
-            "maximum iteration count: 1",
-        ):
-            await AgentRunner().run(
-                AgentRunSpec(
-                    messages=(HumanMessage(content="Keep calling tools."),),
-                    provider=provider,
-                    tool_registry=ToolRegistry((tool,)),
-                    max_iterations=1,
-                )
+        result = await AgentRunner().run(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Keep calling tools."),),
+                provider=provider,
+                tool_registry=ToolRegistry((tool,)),
+                max_iterations=1,
             )
+        )
 
         self.assertEqual(tool.calls, [{"value": "loop"}])
         self.assertEqual(len(provider.complete_calls), 1)
+        self.assertIsNone(result.content)
+        self.assertEqual(result.stop_reason, "max_iterations")
+        self.assertEqual(
+            result.messages,
+            (
+                HumanMessage(content="Keep calling tools."),
+                AIMessage(
+                    content="",
+                    tool_calls=(tool_call("call-1", "record", value="loop"),),
+                ),
+                ToolMessage(content="recorded: loop", tool_call_id="call-1"),
+            ),
+        )
