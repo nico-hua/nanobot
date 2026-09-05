@@ -653,6 +653,8 @@ class AgentLoop:
         return (HumanMessage(content=_GOAL_INJECTION_TEMPLATE.format(messages=content)),)
 
     def _cancel_active_turn(self, session_key: str) -> bool:
+        # Do not let input collected for a cancelled goal leak into a later turn.
+        self._pending_user_messages.pop(session_key, None)
         current_task = asyncio.current_task()
         tasks = tuple(self._active_turn_tasks.get(session_key, ()))
         # /stop 只影响当前会话，不会取消其他 channel 或 chat 的请求。
@@ -668,6 +670,7 @@ class AgentLoop:
         return bool(active_tasks)
 
     def _cancel_goal_turn(self, session_key: str) -> bool:
+        self._pending_user_messages.pop(session_key, None)
         task = self._goal_turn_tasks.get(session_key)
         if task is None or task.done():
             return False

@@ -476,6 +476,14 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         bus = RecordingMessageBus()
         provider = ScriptedProvider(())
         loop = self._loop(provider, message_bus=bus)
+        loop._queue_goal_user_message(
+            "session-1",
+            InboundMessage("test", "chat-1", "sender-1", "session-1", "Pending input."),
+        )
+        loop._queue_goal_user_message(
+            "session-2",
+            InboundMessage("test", "chat-2", "sender-2", "session-2", "Keep this input."),
+        )
 
         result = await _dispatch(loop, "/goal stop", "test", "chat-1", "session-1")
 
@@ -486,6 +494,8 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(restored.goal_state.ended_at)
         self.assertEqual(bus.inbound_messages, [])
         self.assertEqual(provider.complete_calls, [])
+        self.assertNotIn("session-1", loop._pending_user_messages)
+        self.assertIn("session-2", loop._pending_user_messages)
 
     async def test_goal_status_and_stop_report_when_no_goal_exists(self) -> None:
         provider = ScriptedProvider(())
@@ -918,11 +928,21 @@ class AgentLoopCommandTest(unittest.IsolatedAsyncioTestCase):
     async def test_stop_reports_when_no_turn_is_active(self) -> None:
         provider = ScriptedProvider(())
         loop = self._loop(provider)
+        loop._queue_goal_user_message(
+            "session-1",
+            InboundMessage("test", "chat-1", "sender-1", "session-1", "Pending input."),
+        )
+        loop._queue_goal_user_message(
+            "session-2",
+            InboundMessage("test", "chat-2", "sender-2", "session-2", "Keep this input."),
+        )
 
         result = await _dispatch(loop, "/stop", "test", "chat-1", "session-1")
 
         self.assertIn("没有正在执行", result.content)
         self.assertEqual(provider.complete_calls, [])
+        self.assertNotIn("session-1", loop._pending_user_messages)
+        self.assertIn("session-2", loop._pending_user_messages)
 
     async def test_bus_stop_has_priority_over_a_running_turn(self) -> None:
         bus = MessageBus()
