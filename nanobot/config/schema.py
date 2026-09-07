@@ -121,6 +121,69 @@ class QQChannelConfig(BaseModel):
         return self.allow_from == ["*"] or sender_id in self.allow_from
 
 
+class WebSocketChannelConfig(BaseModel):
+    """Local listener settings for the built-in WebSocket channel."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=8765, ge=0, le=65535)
+
+    @field_validator("host")
+    @classmethod
+    def _reject_blank_host(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class AgentConfig(BaseModel):
+    """Agent context and session-compaction settings from ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    context_window_tokens: int = Field(default=128_000, gt=0)
+    compaction_threshold_tokens: int = Field(default=64_000, gt=0)
+    compaction_recent_tokens: int = Field(default=32_000, ge=0)
+
+    @model_validator(mode="after")
+    def _validate_compaction_budgets(self) -> AgentConfig:
+        if self.compaction_recent_tokens >= self.compaction_threshold_tokens:
+            raise ValueError(
+                "compaction_recent_tokens must be less than compaction_threshold_tokens"
+            )
+        return self
+
+
+class CronConfig(BaseModel):
+    """Scheduler settings from ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str = "Asia/Shanghai"
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str) -> str:
+        return _validate_timezone(value)
+
+
+class ChannelConfig(BaseModel):
+    """Channel selection and non-sensitive channel settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default: str = "qq"
+    websocket: WebSocketChannelConfig = Field(default_factory=WebSocketChannelConfig)
+
+    @field_validator("default")
+    @classmethod
+    def _reject_blank_default(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 class MCPServerConfig(BaseModel):
     """Connection and tool registration settings for one MCP server."""
 
@@ -174,41 +237,27 @@ class MCPServerConfig(BaseModel):
         return self.enabled_tools == ["*"] or tool_name in self.enabled_tools
 
 
+class MCPConfig(BaseModel):
+    """MCP Server definitions from ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class NanobotFileConfig(BaseModel):
     """Non-sensitive configuration loaded from ``.nanobot/nanobot.json``."""
 
     model_config = ConfigDict(extra="forbid")
 
     workspace: Path
-    context_window_tokens: int = Field(default=128_000, gt=0)
-    compaction_threshold_tokens: int = Field(default=64_000, gt=0)
-    compaction_recent_tokens: int = Field(default=32_000, ge=0)
-    cron_timezone: str = "Asia/Shanghai"
+    agent: AgentConfig = Field(default_factory=AgentConfig)
+    cron: CronConfig = Field(default_factory=CronConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     provider: ProviderSettingsConfig
-    default_channel: str = "qq"
-    mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-
-    @field_validator("default_channel")
-    @classmethod
-    def _reject_blank_default_channel(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
-
-    @field_validator("cron_timezone")
-    @classmethod
-    def _validate_cron_timezone(cls, value: str) -> str:
-        return _validate_timezone(value)
-
-    @model_validator(mode="after")
-    def _validate_compaction_budgets(self) -> NanobotFileConfig:
-        if self.compaction_recent_tokens >= self.compaction_threshold_tokens:
-            raise ValueError(
-                "compaction_recent_tokens must be less than compaction_threshold_tokens"
-            )
-        return self
+    channel: ChannelConfig = Field(default_factory=ChannelConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
 
 class NanobotConfig(BaseModel):
@@ -224,6 +273,7 @@ class NanobotConfig(BaseModel):
     cron_timezone: str = "Asia/Shanghai"
     api: ApiConfig = Field(default_factory=ApiConfig)
     default_channel: str = "qq"
+    websocket: WebSocketChannelConfig = Field(default_factory=WebSocketChannelConfig)
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None
 

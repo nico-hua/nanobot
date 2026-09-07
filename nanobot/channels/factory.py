@@ -8,6 +8,7 @@ from ..bus import MessageBus
 from ..config import NanobotConfig
 from .base import BaseChannel
 from .qq import QQChannel
+from .websocket import WebSocketChannel
 
 ChannelConstructor = Callable[[str, MessageBus, NanobotConfig], BaseChannel]
 
@@ -44,7 +45,12 @@ class ChannelFactory:
 def create_default_channel_factory() -> ChannelFactory:
     """Return a factory with the channels supported by this project."""
 
-    return ChannelFactory({"qq": _create_qq_channel})
+    return ChannelFactory(
+        {
+            "qq": _create_qq_channel,
+            "websocket": _create_websocket_channel,
+        }
+    )
 
 
 def _create_qq_channel(
@@ -55,3 +61,11 @@ def _create_qq_channel(
     if config.qq is None:
         raise ValueError("The qq channel requires QQ credentials in .env")
     return QQChannel(channel_name, message_bus, config.qq)
+
+
+def _create_websocket_channel(
+    channel_name: str,
+    message_bus: MessageBus,
+    config: NanobotConfig,
+) -> BaseChannel:
+    return WebSocketChannel(channel_name, message_bus, config.websocket)

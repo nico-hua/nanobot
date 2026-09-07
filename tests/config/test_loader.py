@@ -20,16 +20,25 @@ class ConfigLoaderTest(unittest.TestCase):
                 json.dumps(
                     {
                         "workspace": "workspace",
-                        "context_window_tokens": 512,
-                        "compaction_threshold_tokens": 192,
-                        "compaction_recent_tokens": 96,
-                        "cron_timezone": "UTC",
+                        "agent": {
+                            "context_window_tokens": 512,
+                            "compaction_threshold_tokens": 192,
+                            "compaction_recent_tokens": 96,
+                        },
+                        "cron": {"timezone": "UTC"},
                         "logging": {"level": "DEBUG"},
                         "api": {
                             "enabled": True,
                             "host": "127.0.0.1",
                             "port": 8100,
                             "request_timeout_seconds": 15,
+                        },
+                        "channel": {
+                            "default": "qq",
+                            "websocket": {
+                                "host": "127.0.0.1",
+                                "port": 8101,
+                            },
                         },
                         "provider": {
                             "type": "openai_compat",
@@ -38,8 +47,11 @@ class ConfigLoaderTest(unittest.TestCase):
                             "max_tokens": 64,
                             "temperature": 0.3,
                         },
-                        "default_channel": "qq",
-                        "mcp_servers": {},
+                        "mcp": {
+                            "servers": {
+                                "local": {"command": "python"},
+                            },
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -57,6 +69,8 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertTrue(config.api.enabled)
         self.assertEqual(config.api.port, 8100)
         self.assertEqual(config.api.request_timeout_seconds, 15)
+        self.assertEqual(config.websocket.port, 8101)
+        self.assertIn("local", config.mcp_servers)
         self.assertEqual(config.provider.api_key, "test-key")
         self.assertEqual(config.provider.default_model, "test-model")
         self.assertEqual(config.provider.default_max_tokens, 64)

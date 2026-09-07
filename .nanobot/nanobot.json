@@ -1,27 +1,37 @@
 {
-    "workspace":  "D:\\Github Project\\nanobot\\.nanobot\\workspace",
-    "context_window_tokens": 128000,
-    "compaction_threshold_tokens": 64000,
-    "compaction_recent_tokens": 16000,
-    "cron_timezone": "Asia/Shanghai",
-    "logging":  {
-                    "level":  "INFO"
-                },
-    "api":  {
-                "enabled": true,
-                "host": "127.0.0.1",
-                "port": 8000,
-                "request_timeout_seconds": 60
-            },
-    "provider":  {
-                     "type":  "openai_compat",
-                     "api_base":  "https://api.deepseek.com",
-                     "model":  "deepseek-v4-flash",
-                     "max_tokens":  2048,
-                     "temperature":  0.7
-                 },
-    "default_channel":  "qq",
-    "mcp_servers":  {
-
-                    }
+    "workspace": "D:\\Github Project\\nanobot\\.nanobot\\workspace",
+    "agent": {
+        "context_window_tokens": 128000,
+        "compaction_threshold_tokens": 64000,
+        "compaction_recent_tokens": 16000
+    },
+    "cron": {
+        "timezone": "Asia/Shanghai"
+    },
+    "logging": {
+        "level": "INFO"
+    },
+    "api": {
+        "enabled": true,
+        "host": "127.0.0.1",
+        "port": 8000,
+        "request_timeout_seconds": 60
+    },
+    "provider": {
+        "type": "openai_compat",
+        "api_base": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
+        "max_tokens": 2048,
+        "temperature": 0.7
+    },
+    "channel": {
+        "default": "websocket",
+        "websocket": {
+            "host": "127.0.0.1",
+            "port": 8765
+        }
+    },
+    "mcp": {
+        "servers": {}
+    }
 }

@@ -4,8 +4,13 @@ import unittest
 
 from pydantic import ValidationError
 
-from nanobot.config import ApiConfig, MCPServerConfig, QQChannelConfig
-from nanobot.config.schema import NanobotConfig, ProviderConfig
+from nanobot.config import (
+    ApiConfig,
+    MCPServerConfig,
+    QQChannelConfig,
+    WebSocketChannelConfig,
+)
+from nanobot.config.schema import NanobotConfig, NanobotFileConfig, ProviderConfig
 
 
 class MCPServerConfigTest(unittest.TestCase):
@@ -116,6 +121,23 @@ class ApiConfigTest(unittest.TestCase):
                 ApiConfig(**values)
 
 
+class WebSocketChannelConfigTest(unittest.TestCase):
+    def test_defaults_to_a_local_listener(self) -> None:
+        config = WebSocketChannelConfig()
+
+        self.assertEqual(config.host, "127.0.0.1")
+        self.assertEqual(config.port, 8765)
+
+    def test_rejects_invalid_listener_settings(self) -> None:
+        for values in (
+            {"host": " "},
+            {"port": -1},
+            {"port": 65_536},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                WebSocketChannelConfig(**values)
+
+
 class NanobotConfigTest(unittest.TestCase):
     def test_defaults_to_qq_as_the_selected_channel(self) -> None:
         config = NanobotConfig(
@@ -133,6 +155,7 @@ class NanobotConfigTest(unittest.TestCase):
         self.assertEqual(config.compaction_recent_tokens, 32_000)
         self.assertEqual(config.cron_timezone, "Asia/Shanghai")
         self.assertFalse(config.api.enabled)
+        self.assertEqual(config.websocket.host, "127.0.0.1")
 
     def test_rejects_an_invalid_cron_timezone(self) -> None:
         with self.assertRaises(ValidationError):
@@ -170,3 +193,32 @@ class NanobotConfigTest(unittest.TestCase):
                 compaction_threshold_tokens=100,
                 compaction_recent_tokens=100,
             )
+
+
+class NanobotFileConfigTest(unittest.TestCase):
+    def test_groups_non_sensitive_settings_by_runtime_concern(self) -> None:
+        config = NanobotFileConfig(
+            workspace="workspace",
+            agent={
+                "context_window_tokens": 512,
+                "compaction_threshold_tokens": 192,
+                "compaction_recent_tokens": 96,
+            },
+            cron={"timezone": "UTC"},
+            provider={
+                "type": "openai_compat",
+                "api_base": "https://example.test/v1",
+                "model": "test-model",
+            },
+            channel={
+                "default": "websocket",
+                "websocket": {"port": 8101},
+            },
+            mcp={"servers": {"local": {"command": "python"}}},
+        )
+
+        self.assertEqual(config.agent.context_window_tokens, 512)
+        self.assertEqual(config.cron.timezone, "UTC")
+        self.assertEqual(config.channel.default, "websocket")
+        self.assertEqual(config.channel.websocket.port, 8101)
+        self.assertIn("local", config.mcp.servers)

@@ -10,9 +10,15 @@ from nanobot.channels import (
     BaseChannel,
     ChannelFactory,
     QQChannel,
+    WebSocketChannel,
     create_default_channel_factory,
 )
-from nanobot.config import NanobotConfig, ProviderConfig, QQChannelConfig
+from nanobot.config import (
+    NanobotConfig,
+    ProviderConfig,
+    QQChannelConfig,
+    WebSocketChannelConfig,
+)
 
 
 class StubChannel(BaseChannel):
@@ -39,6 +45,18 @@ class ChannelFactoryTest(unittest.TestCase):
 
         self.assertIsInstance(channel, QQChannel)
         self.assertEqual(channel.name, "qq")
+        self.assertIs(channel.message_bus, bus)
+
+    def test_default_factory_registers_websocket_channel(self) -> None:
+        bus = MessageBus()
+        config = _config(default_channel="websocket").model_copy(
+            update={"websocket": WebSocketChannelConfig(port=8765)}
+        )
+
+        channel = create_default_channel_factory().create("websocket", bus, config)
+
+        self.assertIsInstance(channel, WebSocketChannel)
+        self.assertEqual(channel.name, "websocket")
         self.assertIs(channel.message_bus, bus)
 
     def test_unknown_channel_type_is_rejected(self) -> None:

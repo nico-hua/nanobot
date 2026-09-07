@@ -9,8 +9,12 @@ from .loader import (
     load_nanobot_config,
 )
 from .schema import (
+    AgentConfig,
     ApiConfig,
+    ChannelConfig,
+    CronConfig,
     LoggingConfig,
+    MCPConfig,
     MCPServerConfig,
     MCPTransportType,
     NanobotConfig,
@@ -18,14 +22,19 @@ from .schema import (
     ProviderConfig,
     ProviderSettingsConfig,
     QQChannelConfig,
+    WebSocketChannelConfig,
 )
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
     "DEFAULT_ENV_PATH",
+    "AgentConfig",
     "ApiConfig",
+    "ChannelConfig",
     "ConfigError",
+    "CronConfig",
     "LoggingConfig",
+    "MCPConfig",
     "MCPServerConfig",
     "MCPTransportType",
     "NanobotConfig",
@@ -33,6 +42,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderSettingsConfig",
     "QQChannelConfig",
+    "WebSocketChannelConfig",
     "get_env_value",
     "load_file_config",
     "load_nanobot_config",
