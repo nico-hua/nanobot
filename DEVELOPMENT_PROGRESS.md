@@ -79,6 +79,14 @@
 - [x] 完善目标终态判定：非 `max_iterations` 的目标 turn 只有在模型返回非空、非纯空白文本时标记为 `completed`；空文本或 `None` 标记为 `failed`。目标停止、取消和失效 continuation 不会重新启动已终止目标。
 - [x] 最近一次完整离线测试：`379 passed, 7 skipped`。
 
+### 2026-09-07
+
+- [x] 新增基于 `aiohttp` 的最小本地 HTTP API：`GET /health` 用于健康检查，`POST /v1/messages` 接收 `session_id` 与 `content`，并返回对应 session 的最终文本响应。路由、JSON 校验、请求体大小限制、超时和框架错误均在 `HttpApiService` 中集中处理。
+- [x] HTTP 请求通过 `InboundMessage(channel="api")` 直接交给 `AgentLoop.process_inbound()`，不发布原始请求到 `MessageBus`，以便同步返回结果；但仍复用 AgentLoop 的命令、Session 串行化、目标模式、工具和 AgentRunner 流程，不会直接访问 Provider。
+- [x] 增加 `ApiConfig`：非敏感 API 设置位于 `.nanobot/nanobot.json`，包含 `enabled`、`host`、`port` 与 `request_timeout_seconds`；`Application` 负责在 Cron 启动后启动 API，并在关闭时优先停止监听器。
+- [x] 简化 `Application.close()`：以线性关闭步骤替代嵌套 `try/finally`，保持 API → Cron → Channel → AgentLoop → MCP 的关闭顺序。单个组件的普通关闭异常会记录后继续清理；取消会在全部资源获得清理机会后继续传播。
+- [x] 为 HTTP 路由、请求到 AgentLoop 的转换、同/不同 session 行为、异常映射以及 Application API 生命周期增加 fake-based 测试；关闭期间发生取消时仍完成后续资源清理。最新完整离线测试：`392 passed, 7 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具
@@ -95,6 +103,7 @@
 - [ ] `web_fetch`：读取网页内容。
 - [ ] `message`：主动发送一般消息。
 - [ ] 其他真实 Channel，以及媒体、文件和流式消息支持。
+- [ ] HTTP API 的认证、流式响应、WebSocket、异步任务查询和完整 OpenAI 兼容协议。
 
 ### 高级能力
 
@@ -115,6 +124,7 @@
 - Subagent 后台任务尚无持久化、进程重启恢复、自动重试、结果在原始 tool call 中实时注入、LLM 可调用的任务管理工具或多 Agent 协作。
 - `ExecTool` 不是安全沙箱；仍需要操作系统级 sandbox 来限制文件、网络、系统调用与进程权限。
 - QQ 之外的 Channel、消息重试、可靠投递、总线持久化、优先级、结构化日志、指标、追踪和外部日志后端尚未实现。
+- HTTP API 当前仅适合受信任的本地调用：虽然默认监听 `127.0.0.1`，但尚无认证、限流、审计日志、跨进程会话协调或生产部署策略。
 
 ## 待解决问题
 

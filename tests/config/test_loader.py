@@ -25,6 +25,12 @@ class ConfigLoaderTest(unittest.TestCase):
                         "compaction_recent_tokens": 96,
                         "cron_timezone": "UTC",
                         "logging": {"level": "DEBUG"},
+                        "api": {
+                            "enabled": True,
+                            "host": "127.0.0.1",
+                            "port": 8100,
+                            "request_timeout_seconds": 15,
+                        },
                         "provider": {
                             "type": "openai_compat",
                             "api_base": "https://example.test/v1",
@@ -48,6 +54,9 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertEqual(config.compaction_threshold_tokens, 192)
         self.assertEqual(config.compaction_recent_tokens, 96)
         self.assertEqual(config.cron_timezone, "UTC")
+        self.assertTrue(config.api.enabled)
+        self.assertEqual(config.api.port, 8100)
+        self.assertEqual(config.api.request_timeout_seconds, 15)
         self.assertEqual(config.provider.api_key, "test-key")
         self.assertEqual(config.provider.default_model, "test-model")
         self.assertEqual(config.provider.default_max_tokens, 64)

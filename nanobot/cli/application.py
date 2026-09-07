@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from ..agent import AgentLoop, AgentRunner, ContextBuilder
+from ..api import HttpApiService
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
-from ..config import NanobotConfig, ProviderConfig, load_nanobot_config
+from ..config import ApiConfig, NanobotConfig, ProviderConfig, load_nanobot_config
 from ..cron import CronCallback, CronMessagePublisher, CronService
 from ..mcp import MCPProvider
 from ..memory import MemoryConsolidator, MemoryStore
@@ -43,6 +44,7 @@ AgentLoopFactory = Callable[
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
 CronServiceFactory = Callable[[CronCallback, Path], CronService]
+ApiServiceFactory = Callable[[AgentLoop, ApiConfig], HttpApiService]
 
 
 class Application:
@@ -59,6 +61,7 @@ class Application:
         agent_loop_factory: AgentLoopFactory | None = None,
         channel_manager_factory: ChannelManagerFactory = ChannelManager,
         cron_service_factory: CronServiceFactory = CronService,
+        api_service_factory: ApiServiceFactory = HttpApiService,
     ) -> None:
         if not isinstance(config, NanobotConfig):
             raise TypeError("Application requires a NanobotConfig")
@@ -131,6 +134,7 @@ class Application:
             self._message_bus,
             self._subagent_manager,
         )
+        self._api_service = api_service_factory(self._agent_loop, config.api)
         channel = channel_factory(config.default_channel, self._message_bus, config)
         self._channel_manager = channel_manager_factory(self._message_bus, (channel,))
         self._agent_task: asyncio.Task[None] | None = None
@@ -187,6 +191,12 @@ class Application:
         """Return the callback that routes due Cron tasks through the MessageBus."""
 
         return self._cron_publisher
+
+    @property
+    def api_service(self) -> HttpApiService:
+        """Return the HTTP adapter managed by this application."""
+
+        return self._api_service
 
     @property
     def subagent_manager(self) -> SubagentManager:
@@ -254,6 +264,7 @@ class Application:
             if self._channel_task is None:
                 raise RuntimeError("ChannelManager did not create a dispatcher task")
             await self._cron_service.start()
+            await self._api_service.start()
         except asyncio.CancelledError:
             await self.close()
             raise
@@ -279,29 +290,24 @@ class Application:
             self._closed = True
             self._stop_event.set()
             logger.info("Application stopping")
-            try:
-                await self._cron_service.stop()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Application failed while stopping CronService")
-            finally:
-                try:
-                    await self._channel_manager.stop_all()
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception("Application failed while stopping the ChannelManager")
-                finally:
-                    self._channel_task = None
-                    await self._cancel_agent_task()
-                    await self._close_agent_loop()
-                    try:
-                        await self._mcp_provider.close()
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception:
-                        logger.exception("Application failed while closing MCP connections")
+            cancellation = await self._run_shutdown_steps(
+                (self._api_service.stop, "Application failed while stopping the HTTP API service"),
+                (self._cron_service.stop, "Application failed while stopping CronService"),
+                (self._channel_manager.stop_all, "Application failed while stopping the ChannelManager"),
+            )
+            self._channel_task = None
+
+            remaining_cancellation = await self._run_shutdown_steps(
+                (self._cancel_agent_task, "Application failed while cancelling the AgentLoop task"),
+                (self._agent_loop.close, "Application failed while closing AgentLoop background tasks"),
+                (self._mcp_provider.close, "Application failed while closing MCP connections"),
+            )
+            if cancellation is None:
+                cancellation = remaining_cancellation
+            # Finish every cleanup step before respecting a cancellation that
+            # arrived while one of them was running.
+            if cancellation is not None:
+                raise cancellation
             self._started = False
             logger.info("Application stopped")
 
@@ -316,13 +322,24 @@ class Application:
         except asyncio.CancelledError:
             pass
 
-    async def _close_agent_loop(self) -> None:
-        try:
-            await self._agent_loop.close()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Application failed while closing AgentLoop background tasks")
+    async def _run_shutdown_steps(
+        self,
+        *steps: tuple[Callable[[], Awaitable[None]], str],
+    ) -> asyncio.CancelledError | None:
+        """Run independent cleanup steps without skipping later resources."""
+
+        cancellation: asyncio.CancelledError | None = None
+        for action, failure_message in steps:
+            try:
+                await action()
+            except asyncio.CancelledError as error:
+                # Cancellation is propagated by close() after all resources
+                # had one chance to shut down.
+                if cancellation is None:
+                    cancellation = error
+            except Exception:
+                logger.exception(failure_message)
+        return cancellation
 
     def _runtime_tasks(self) -> tuple[asyncio.Task[None], asyncio.Task[None]]:
         if self._agent_task is None or self._channel_task is None:

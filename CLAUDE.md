@@ -32,7 +32,7 @@ Provider/QQ live tests are skipped by default and only run when `RUN_DEEPSEEK_LI
 
 ## Dependencies
 
-Runtime: `pydantic` (v2 API: `model_validate`, `field_validator`, `AliasChoices`), `openai`, `anthropic`, `mcp`, `httpx`. Optional at runtime: `qq-botpy` (only needed to start the QQ channel). Test-only: `fastmcp` (`mcp.server.fastmcp`, used by the MCP stdio integration test). Code targets Python 3.14 and uses `from __future__ import annotations` throughout.
+Runtime: `pydantic` (v2 API: `model_validate`, `field_validator`, `AliasChoices`), `openai`, `anthropic`, `mcp`, `httpx`, `aiohttp`. Optional at runtime: `qq-botpy` (only needed to start the QQ channel). Test-only: `fastmcp` (`mcp.server.fastmcp`, used by the MCP stdio integration test). Code targets Python 3.14 and uses `from __future__ import annotations` throughout.
 
 ## Architecture
 

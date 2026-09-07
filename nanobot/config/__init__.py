@@ -9,6 +9,7 @@ from .loader import (
     load_nanobot_config,
 )
 from .schema import (
+    ApiConfig,
     LoggingConfig,
     MCPServerConfig,
     MCPTransportType,
@@ -22,6 +23,7 @@ from .schema import (
 __all__ = [
     "DEFAULT_CONFIG_PATH",
     "DEFAULT_ENV_PATH",
+    "ApiConfig",
     "ConfigError",
     "LoggingConfig",
     "MCPServerConfig",

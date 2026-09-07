@@ -7,6 +7,12 @@
     "logging":  {
                     "level":  "INFO"
                 },
+    "api":  {
+                "enabled": true,
+                "host": "127.0.0.1",
+                "port": 8000,
+                "request_timeout_seconds": 60
+            },
     "provider":  {
                      "type":  "openai_compat",
                      "api_base":  "https://api.deepseek.com",

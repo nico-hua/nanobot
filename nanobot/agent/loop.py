@@ -196,6 +196,40 @@ class AgentLoop:
             await self.close()
             raise
 
+    async def process_inbound(
+        self,
+        inbound: InboundMessage,
+    ) -> OutboundMessage | None:
+        """Process one externally supplied message without publishing to the bus.
+
+        HTTP and other request/response adapters use this entry point when they
+        need the immediate response themselves.  It deliberately follows the
+        same command, session-lock, and goal-mode routing rules as ``run``.
+        ``None`` means that a normal user message was queued for an active goal
+        rather than producing an immediate response.
+        """
+
+        if not isinstance(inbound, InboundMessage):
+            raise TypeError("AgentLoop requires an InboundMessage")
+        if self._closed:
+            raise RuntimeError("AgentLoop is closed")
+
+        invocation = self._command_router.parse(inbound.content)
+        session_key = _session_key(
+            inbound.channel,
+            inbound.chat_id,
+            inbound.session_id,
+        )
+        if self._command_router.is_stop_command(invocation):
+            return await self._run_stop_command(inbound, invocation)
+        if self._is_goal_mode_message(inbound, invocation, session_key):
+            return await self._process_direct_goal_mode_message(
+                inbound,
+                invocation,
+                session_key,
+            )
+        return await self._dispatch_non_stop_message(inbound, invocation)
+
     async def close(self) -> None:
         """Cancel and await all tracked background session tasks."""
 
@@ -617,6 +651,26 @@ class AgentLoop:
             invocation,
             session=self._session_manager.get_or_create(session_key),
             operation="/goal during goal mode",
+        )
+
+    async def _process_direct_goal_mode_message(
+        self,
+        inbound: InboundMessage,
+        invocation: CommandInvocation | None,
+        session_key: str,
+    ) -> OutboundMessage | None:
+        """Apply goal-mode routing for a request/response adapter."""
+
+        if _is_goal_continuation_message(inbound):
+            self._start_goal_continuation(inbound, session_key)
+            return None
+        if invocation is None:
+            self._queue_goal_user_message(session_key, inbound)
+            return None
+        return await self._route_command(
+            inbound,
+            invocation,
+            session=self._session_manager.get_or_create(session_key),
         )
 
     def _queue_goal_user_message(

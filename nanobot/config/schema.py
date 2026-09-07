@@ -28,6 +28,24 @@ class LoggingConfig(BaseModel):
     level: LogLevel = "INFO"
 
 
+class ApiConfig(BaseModel):
+    """Local HTTP API settings stored in ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=0, le=65535)
+    request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+
+    @field_validator("host")
+    @classmethod
+    def _reject_blank_host(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
 class ProviderSettingsConfig(BaseModel):
     """Non-sensitive provider settings stored in ``nanobot.json``."""
 
@@ -167,6 +185,7 @@ class NanobotFileConfig(BaseModel):
     compaction_recent_tokens: int = Field(default=32_000, ge=0)
     cron_timezone: str = "Asia/Shanghai"
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
     provider: ProviderSettingsConfig
     default_channel: str = "qq"
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
@@ -203,6 +222,7 @@ class NanobotConfig(BaseModel):
     compaction_threshold_tokens: int = Field(default=64_000, gt=0)
     compaction_recent_tokens: int = Field(default=32_000, ge=0)
     cron_timezone: str = "Asia/Shanghai"
+    api: ApiConfig = Field(default_factory=ApiConfig)
     default_channel: str = "qq"
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None

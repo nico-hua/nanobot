@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from nanobot.agent import AgentRunner, ContextBuilder
+from nanobot.api import HttpApiService
 from nanobot.bus import MessageBus
 from nanobot.channels import BaseChannel, ChannelManager, FakeChannel
 from nanobot.cli import Application
-from nanobot.config import MCPServerConfig, NanobotConfig, ProviderConfig
+from nanobot.config import ApiConfig, MCPServerConfig, NanobotConfig, ProviderConfig
 from nanobot.cron import CronCallback, CronService
 from nanobot.memory import MemoryConsolidator
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
@@ -206,6 +207,34 @@ class RecordingCronService(CronService):
         self.stopped = True
 
 
+class RecordingApiService:
+    def __init__(
+        self,
+        loop: RecordingLoop,
+        config: ApiConfig,
+        events: list[str],
+    ) -> None:
+        self.loop = loop
+        self.config = config
+        self.events = events
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        self.events.append("api.start")
+        self.started = True
+
+    async def stop(self) -> None:
+        self.events.append("api.stop")
+        self.stopped = True
+
+
+class CancellingApiService(RecordingApiService):
+    async def stop(self) -> None:
+        await super().stop()
+        raise asyncio.CancelledError
+
+
 class ApplicationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._temporary_directory = tempfile.TemporaryDirectory()
@@ -245,6 +274,83 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cron_service.stopped)
         self.assertLess(events.index("cron.stop"), events.index("channel_manager.stop"))
         self.assertEqual(manager.stop_calls, 1)
+
+    async def test_manages_the_http_api_service_with_the_agent_loop(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        api_services: list[RecordingApiService] = []
+        config = self._config().model_copy(update={"api": ApiConfig(enabled=True)})
+
+        def api_service_factory(
+            agent_loop: RecordingLoop,
+            api_config: ApiConfig,
+        ) -> RecordingApiService:
+            service = RecordingApiService(agent_loop, api_config, events)
+            api_services.append(service)
+            return service
+
+        app, _manager = _fake_application(
+            events,
+            loop,
+            workspace=self._workspace,
+            config=config,
+            api_service_factory=api_service_factory,
+        )
+
+        await app.start()
+
+        service = api_services[0]
+        self.assertIs(app.api_service, service)
+        self.assertIs(service.loop, loop)
+        self.assertTrue(service.config.enabled)
+        self.assertTrue(service.started)
+
+        await app.close()
+
+        self.assertTrue(service.stopped)
+        self.assertLess(events.index("api.start"), events.index("api.stop"))
+
+    async def test_close_finishes_cleanup_before_propagating_cancellation(self) -> None:
+        events: list[str] = []
+        loop = RecordingLoop(events)
+        cron_services: list[RecordingCronService] = []
+
+        def cron_service_factory(callback: CronCallback, workspace: Path) -> CronService:
+            service = RecordingCronService(callback, workspace, events)
+            cron_services.append(service)
+            return service
+
+        app, manager = _fake_application(
+            events,
+            loop,
+            workspace=self._workspace,
+            config=self._config().model_copy(update={"api": ApiConfig(enabled=True)}),
+            cron_service_factory=cron_service_factory,
+            api_service_factory=lambda agent_loop, config: CancellingApiService(
+                agent_loop,
+                config,
+                events,
+            ),
+        )
+        await app.start()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await app.close()
+
+        self.assertTrue(cron_services[0].stopped)
+        self.assertEqual(manager.stop_calls, 1)
+        self.assertTrue(app.mcp_provider.closed)
+        self.assertEqual(
+            events[-6:],
+            [
+                "api.stop",
+                "cron.stop",
+                "channel_manager.stop",
+                "loop.close",
+                "loop.background.close",
+                "mcp.close",
+            ],
+        )
 
     async def test_assembles_shared_dependencies_and_closes_in_reverse_order(self) -> None:
         events: list[str] = []
@@ -544,6 +650,9 @@ def _fake_application(
     workspace: Path,
     manager_start_error: Exception | None = None,
     cron_service_factory: Callable[[CronCallback, Path], CronService] | None = None,
+    config: NanobotConfig | None = None,
+    api_service_factory: Callable[[RecordingLoop, ApiConfig], RecordingApiService]
+    | None = None,
 ) -> tuple[Application, FakeChannelManager]:
     managers: list[FakeChannelManager] = []
     cron_service_factory = cron_service_factory or (
@@ -569,7 +678,7 @@ def _fake_application(
         return manager
 
     app = Application(
-        _config(workspace),
+        config or _config(workspace),
         provider_factory=lambda config: FakeProvider(),
         channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
         mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
@@ -581,5 +690,6 @@ def _fake_application(
         agent_loop_factory=lambda runner, provider, registry, session_manager, context_builder, session_compactor, memory_store, memory_consolidator, bus, subagent_manager: _configure_loop(loop, bus),
         channel_manager_factory=manager_factory,
         cron_service_factory=cron_service_factory,
+        api_service_factory=api_service_factory or HttpApiService,
     )
     return app, managers[0]

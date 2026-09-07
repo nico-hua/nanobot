@@ -4,7 +4,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from nanobot.config import MCPServerConfig, QQChannelConfig
+from nanobot.config import ApiConfig, MCPServerConfig, QQChannelConfig
 from nanobot.config.schema import NanobotConfig, ProviderConfig
 
 
@@ -96,6 +96,26 @@ class ProviderConfigTest(unittest.TestCase):
             )
 
 
+class ApiConfigTest(unittest.TestCase):
+    def test_defaults_to_a_disabled_local_listener(self) -> None:
+        config = ApiConfig()
+
+        self.assertFalse(config.enabled)
+        self.assertEqual(config.host, "127.0.0.1")
+        self.assertEqual(config.port, 8000)
+        self.assertEqual(config.request_timeout_seconds, 60.0)
+
+    def test_rejects_invalid_listener_settings(self) -> None:
+        for values in (
+            {"host": " "},
+            {"port": -1},
+            {"port": 65_536},
+            {"request_timeout_seconds": 0},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                ApiConfig(**values)
+
+
 class NanobotConfigTest(unittest.TestCase):
     def test_defaults_to_qq_as_the_selected_channel(self) -> None:
         config = NanobotConfig(
@@ -112,6 +132,7 @@ class NanobotConfigTest(unittest.TestCase):
         self.assertEqual(config.compaction_threshold_tokens, 64_000)
         self.assertEqual(config.compaction_recent_tokens, 32_000)
         self.assertEqual(config.cron_timezone, "Asia/Shanghai")
+        self.assertFalse(config.api.enabled)
 
     def test_rejects_an_invalid_cron_timezone(self) -> None:
         with self.assertRaises(ValidationError):

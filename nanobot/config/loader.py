@@ -73,6 +73,7 @@ def load_nanobot_config(
         compaction_threshold_tokens=file_config.compaction_threshold_tokens,
         compaction_recent_tokens=file_config.compaction_recent_tokens,
         cron_timezone=file_config.cron_timezone,
+        api=file_config.api,
         default_channel=file_config.default_channel,
         mcp_servers=file_config.mcp_servers,
         qq=_load_qq_config(env_path),
