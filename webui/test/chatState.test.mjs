@@ -7,14 +7,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyServerEvent,
   beginUserMessage,
-  createClientMessage,
   createInitialChatState,
-  isEventForSession,
   markConnected,
   markConnectionError,
   markDisconnected,
   replaceChatHistory,
 } from "../.test-build/hooks/chatState.js";
+import {
+  createWebSocketClientMessage,
+  isEventForSession,
+  parseServerEvent,
+} from "../.test-build/types/protocol.js";
 import {
   createSessionId,
   fetchSessionHistory,
@@ -41,17 +44,48 @@ test("connection state reports connecting, connected, disconnected, and errors",
 });
 
 test("the client message uses the existing backend WebSocket protocol", () => {
-  assert.deepEqual(createClientMessage("chat-1", "session-1", "Hello"), {
-    type: "message",
-    chat_id: "chat-1",
-    session_id: "session-1",
-    content: "Hello",
-  });
+  assert.deepEqual(
+    createWebSocketClientMessage("chat-1", "session-1", "Hello"),
+    {
+      type: "message",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      content: "Hello",
+    },
+  );
+});
+
+test("the protocol parser accepts only the existing server event contract", () => {
+  assert.deepEqual(
+    parseServerEvent({
+      type: "turn_end",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      content: "Complete response",
+      metadata: { stop_reason: "stop" },
+    }),
+    {
+      type: "turn_end",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      content: "Complete response",
+      metadata: { stop_reason: "stop" },
+    },
+  );
+  assert.equal(
+    parseServerEvent({ type: "delta", content: "Missing route" }),
+    null,
+  );
 });
 
 test("saved-session history replaces visible chat state without mixing sessions", () => {
   let state = beginUserMessage(createInitialChatState(), "Old session message");
-  state = applyServerEvent(state, { type: "message", content: "Old reply" });
+  state = applyServerEvent(state, {
+    type: "message",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "Old reply",
+  });
 
   state = replaceChatHistory(state, [
     { role: "user", content: "New session message" },
@@ -76,14 +110,25 @@ test("saved-session history replaces visible chat state without mixing sessions"
 test("late stream events from an unselected session are ignored", () => {
   assert.equal(
     isEventForSession(
-      { type: "delta", session_id: "session-one", content: "Late" },
+      {
+        type: "delta",
+        chat_id: "chat-1",
+        session_id: "session-one",
+        content: "Late",
+      },
       "session-two",
     ),
     false,
   );
   assert.equal(
     isEventForSession(
-      { type: "turn_end", session_id: "session-two", content: "Current" },
+      {
+        type: "turn_end",
+        chat_id: "chat-1",
+        session_id: "session-two",
+        content: "Current",
+        metadata: {},
+      },
       "session-two",
     ),
     true,
@@ -180,8 +225,18 @@ test("session API failures retain a clear status and error message", async () =>
 
 test("deltas accumulate into one assistant message and turn_end does not duplicate it", () => {
   let state = beginUserMessage(createInitialChatState(), "Hello");
-  state = applyServerEvent(state, { type: "delta", content: "Hello " });
-  state = applyServerEvent(state, { type: "delta", content: "Nanobot" });
+  state = applyServerEvent(state, {
+    type: "delta",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "Hello ",
+  });
+  state = applyServerEvent(state, {
+    type: "delta",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "Nanobot",
+  });
 
   assert.equal(state.messages.length, 2);
   assert.deepEqual(state.messages[1], {
@@ -193,7 +248,10 @@ test("deltas accumulate into one assistant message and turn_end does not duplica
 
   state = applyServerEvent(state, {
     type: "turn_end",
+    chat_id: "chat-1",
+    session_id: "session-1",
     content: "Hello Nanobot",
+    metadata: {},
   });
   assert.equal(state.messages.length, 2);
   assert.deepEqual(state.messages[1], {
@@ -209,6 +267,7 @@ test("server errors complete an active turn and remain visible", () => {
   let state = beginUserMessage(createInitialChatState(), "Hello");
   state = applyServerEvent(state, {
     type: "error",
+    code: "message_delivery_failed",
     message: "Message could not be accepted",
   });
 

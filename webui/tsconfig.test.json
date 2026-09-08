@@ -15,6 +15,7 @@
     "src/components/MessageContent.tsx",
     "src/conversationScroll.ts",
     "src/hooks/chatState.ts",
-    "src/api/sessions.ts"
+    "src/api/sessions.ts",
+    "src/types/protocol.ts"
   ]
 }

@@ -11,7 +11,6 @@ import {
   fetchSessionHistory,
   fetchSessionSummaries,
   SessionApiError,
-  type SessionSummary,
 } from "./api/sessions";
 import { MessageContent } from "./components/MessageContent";
 import { isNearConversationBottom } from "./conversationScroll";
@@ -19,6 +18,7 @@ import {
   type ConnectionStatus,
   useNanobotWebSocket,
 } from "./hooks/useNanobotWebSocket";
+import type { SessionInfo } from "./types/protocol";
 import "./App.css";
 
 const CHAT_ID = "webui-default-chat";
@@ -35,7 +35,7 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
 function App() {
   const [draft, setDraft] = useState("");
   const [sessionId, setSessionId] = useState(() => createSessionId());
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(true);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);

@@ -1,19 +1,16 @@
+import type {
+  ChatMessage,
+  PersistedSessionMessage,
+  ServerEvent,
+} from "../types/protocol.js";
+
+export type { ChatMessage } from "../types/protocol.js";
+
 export type ConnectionStatus =
   | "connecting"
   | "connected"
   | "disconnected"
   | "error";
-
-export type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  isStreaming: boolean;
-};
-
-export type PersistedChatMessage = Pick<ChatMessage, "role" | "content">;
-
-export type ServerEvent = Record<string, unknown> & { type: string };
 
 export type ChatState = {
   connectionStatus: ConnectionStatus;
@@ -23,9 +20,6 @@ export type ChatState = {
   activeAssistantId: string | null;
   nextMessageSequence: number;
 };
-
-const INVALID_EVENT_ERROR = "Received an invalid message from Nanobot.";
-const SESSION_EVENT_TYPES = new Set(["delta", "message", "turn_end"]);
 
 export function createInitialChatState(): ChatState {
   return {
@@ -38,30 +32,27 @@ export function createInitialChatState(): ChatState {
   };
 }
 
-export function createClientMessage(
-  chatId: string,
-  sessionId: string,
-  content: string,
-) {
-  return {
-    type: "message",
-    chat_id: chatId,
-    session_id: sessionId,
-    content,
-  };
-}
-
 /** Replace only the visible transcript when the user selects another session. */
 export function replaceChatHistory(
   state: ChatState,
-  messages: readonly PersistedChatMessage[],
+  messages: readonly PersistedSessionMessage[],
 ): ChatState {
-  const visibleMessages = messages.map((message, index) => ({
-    id: `${message.role}-${index + 1}`,
-    role: message.role,
-    content: message.content,
-    isStreaming: false,
-  }));
+  const visibleMessages = messages.map(
+    (message, index): ChatMessage =>
+      message.role === "user"
+        ? {
+            id: `user-${index + 1}`,
+            role: "user",
+            content: message.content,
+            isStreaming: false,
+          }
+        : {
+            id: `assistant-${index + 1}`,
+            role: "assistant",
+            content: message.content,
+            isStreaming: false,
+          },
+  );
   return {
     ...state,
     error: null,
@@ -70,14 +61,6 @@ export function replaceChatHistory(
     activeAssistantId: null,
     nextMessageSequence: visibleMessages.length,
   };
-}
-
-/** Ignore late stream events belonging to a session that is no longer active. */
-export function isEventForSession(event: ServerEvent, sessionId: string): boolean {
-  if (!SESSION_EVENT_TYPES.has(event.type)) {
-    return true;
-  }
-  return event.session_id === sessionId;
 }
 
 export function beginConnection(state: ChatState): ChatState {
@@ -134,31 +117,33 @@ export function beginUserMessage(state: ChatState, content: string): ChatState {
 }
 
 export function applyServerEvent(state: ChatState, event: ServerEvent): ChatState {
-  if (event.type === "ready") {
-    return markConnected(state);
+  switch (event.type) {
+    case "ready":
+      return markConnected(state);
+    case "error":
+      return markServerError(
+        state,
+        event.message.trim()
+          ? event.message
+          : "Nanobot could not process the message.",
+      );
+    case "delta":
+      return appendAssistantDelta(state, event.content);
+    case "message":
+    case "turn_end":
+      // The final event has the complete response, so replace the accumulated
+      // deltas instead of appending it a second time.
+      return withAssistantFinished(
+        state,
+        event.content,
+        state.connectionStatus,
+        null,
+      );
+    default: {
+      const exhaustiveEvent: never = event;
+      return exhaustiveEvent;
+    }
   }
-  if (event.type === "error") {
-    return markServerError(
-      state,
-      typeof event.message === "string" && event.message.trim()
-        ? event.message
-        : "Nanobot could not process the message.",
-    );
-  }
-
-  const content = typeof event.content === "string" ? event.content : null;
-  if (content === null) {
-    return markServerError(state, INVALID_EVENT_ERROR);
-  }
-  if (event.type === "delta") {
-    return appendAssistantDelta(state, content);
-  }
-  if (event.type === "turn_end" || event.type === "message") {
-    // The final event has the complete response, so replace the accumulated
-    // deltas instead of appending it a second time.
-    return withAssistantFinished(state, content, state.connectionStatus, null);
-  }
-  return markServerError(state, INVALID_EVENT_ERROR);
 }
 
 function appendAssistantDelta(state: ChatState, content: string): ChatState {

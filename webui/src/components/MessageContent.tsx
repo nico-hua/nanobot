@@ -1,11 +1,12 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-type MessageContentProps = {
-  role: "user" | "assistant";
-  content: string;
-  isStreaming: boolean;
-};
+import type { ChatMessage } from "../types/protocol.js";
+
+type MessageContentProps = Pick<
+  ChatMessage,
+  "role" | "content" | "isStreaming"
+>;
 
 /** Render user text literally and Agent output as safe GitHub-flavored Markdown. */
 export function MessageContent({

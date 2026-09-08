@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  createWebSocketClientMessage,
+  isEventForSession,
+  parseServerEvent,
+  type PersistedSessionMessage,
+} from "../types/protocol";
+import {
   applyServerEvent,
   beginConnection,
   beginUserMessage,
-  createClientMessage,
   createInitialChatState,
-  isEventForSession,
   markConnected,
   markConnectionError,
   markDisconnected,
   markServerError,
   replaceChatHistory,
-  type PersistedChatMessage,
-  type ServerEvent,
 } from "./chatState";
 
-export type { ChatMessage, ConnectionStatus } from "./chatState";
+export type { ChatMessage } from "../types/protocol";
+export type { ConnectionStatus } from "./chatState";
 
 type UseNanobotWebSocketOptions = {
   url: string | undefined;
@@ -26,15 +29,6 @@ type UseNanobotWebSocketOptions = {
 
 const MISSING_URL_ERROR = "VITE_NANOBOT_WEBSOCKET_URL is not configured.";
 const INVALID_EVENT_ERROR = "Received an invalid message from Nanobot.";
-
-function isServerEvent(value: unknown): value is ServerEvent {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    typeof value.type === "string"
-  );
-}
 
 /** Connect one browser chat session to Nanobot's existing WebSocket Channel. */
 export function useNanobotWebSocket({
@@ -82,15 +76,17 @@ export function useNanobotWebSocket({
         return;
       }
       try {
-        const event: unknown = JSON.parse(messageEvent.data);
-        if (isServerEvent(event) && !isEventForSession(event, activeSessionRef.current)) {
+        const event = parseServerEvent(JSON.parse(messageEvent.data));
+        if (event === null) {
+          setState((currentState) =>
+            markServerError(currentState, INVALID_EVENT_ERROR),
+          );
           return;
         }
-        setState((currentState) =>
-          isServerEvent(event)
-            ? applyServerEvent(currentState, event)
-            : markServerError(currentState, INVALID_EVENT_ERROR),
-        );
+        if (!isEventForSession(event, activeSessionRef.current)) {
+          return;
+        }
+        setState((currentState) => applyServerEvent(currentState, event));
       } catch {
         setState((currentState) =>
           markServerError(currentState, INVALID_EVENT_ERROR),
@@ -140,7 +136,9 @@ export function useNanobotWebSocket({
 
       setState((currentState) => beginUserMessage(currentState, text));
       try {
-        socket.send(JSON.stringify(createClientMessage(chatId, sessionId, text)));
+        socket.send(
+          JSON.stringify(createWebSocketClientMessage(chatId, sessionId, text)),
+        );
       } catch {
         setState((currentState) =>
           markConnectionError(
@@ -156,7 +154,7 @@ export function useNanobotWebSocket({
   );
 
   const replaceMessages = useCallback(
-    (messages: readonly PersistedChatMessage[]) => {
+    (messages: readonly PersistedSessionMessage[]) => {
       setState((currentState) => replaceChatHistory(currentState, messages));
     },
     [],

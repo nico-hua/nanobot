@@ -1,20 +1,10 @@
-export type SessionSummary = {
-  sessionId: string;
-  updatedAt: string;
-  messageCount: number;
-  preview: string;
-};
+import type {
+  PersistedSessionMessage,
+  SessionHistory,
+  SessionInfo,
+} from "../types/protocol.js";
 
-export type SessionHistoryMessage = {
-  role: "user" | "assistant";
-  content: string;
-};
-
-export type SessionHistory = {
-  sessionId: string;
-  updatedAt: string;
-  messages: SessionHistoryMessage[];
-};
+export type { SessionHistory, SessionInfo } from "../types/protocol.js";
 
 export class SessionApiError extends Error {
   constructor(
@@ -29,7 +19,7 @@ export class SessionApiError extends Error {
 /** Fetch persisted chat summaries through Nanobot's read-only HTTP API. */
 export async function fetchSessionSummaries(
   apiBaseUrl: string,
-): Promise<SessionSummary[]> {
+): Promise<SessionInfo[]> {
   const payload = await requestJson(apiBaseUrl, "/v1/sessions");
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw invalidResponse();
@@ -94,7 +84,7 @@ async function requestJson(apiBaseUrl: string, path: string): Promise<unknown> {
   return payload;
 }
 
-function parseSessionSummary(value: unknown): SessionSummary {
+function parseSessionSummary(value: unknown): SessionInfo {
   if (!isRecord(value)) {
     throw invalidResponse();
   }
@@ -110,7 +100,7 @@ function parseSessionSummary(value: unknown): SessionSummary {
   };
 }
 
-function parseHistoryMessage(value: unknown): SessionHistoryMessage {
+function parseHistoryMessage(value: unknown): PersistedSessionMessage {
   if (!isRecord(value) || (value.role !== "user" && value.role !== "assistant")) {
     throw invalidResponse();
   }
