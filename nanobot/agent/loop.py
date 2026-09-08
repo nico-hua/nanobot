@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
 from ..memory import MemoryConsolidator, MemoryEventConsumer, MemoryStore
-from ..providers import BaseMessage, HumanMessage, LLMProvider, SystemMessage
+from ..providers import (
+    BaseMessage,
+    HumanMessage,
+    LLMProvider,
+    SystemMessage,
+    ToolCallRequest,
+)
 from ..session import Session, SessionCompactor, SessionManager
 from ..session.goals import build_goal_continuation_content
 from ..tools import RequestContext, ToolRegistry, bind_request_context
@@ -443,6 +449,7 @@ class AgentLoop:
 
                 message_bus = self._message_bus
                 on_delta = None
+                on_tool_call = None
                 if is_streaming and message_bus is not None:
 
                     async def publish_delta(chunk: str) -> None:
@@ -458,6 +465,27 @@ class AgentLoop:
 
                     on_delta = publish_delta
 
+                    async def publish_tool_call(tool_call: ToolCallRequest) -> None:
+                        # The runner awaits this callback before execution, so
+                        # progress events retain their provider/tool order.
+                        await message_bus.publish_outbound(
+                            _outbound_message(
+                                inbound,
+                                "",
+                                metadata={
+                                    **inbound.metadata,
+                                    "event": "tool_call",
+                                    "tool_call": {
+                                        "id": tool_call.id,
+                                        "name": tool_call.name,
+                                        "arguments": dict(tool_call.arguments),
+                                    },
+                                },
+                            )
+                        )
+
+                    on_tool_call = publish_tool_call
+
                 spec = AgentRunSpec(
                     messages=request_messages,
                     provider=self._provider,
@@ -471,6 +499,7 @@ class AgentLoop:
                     if is_goal_turn
                     else None,
                     on_delta=on_delta,
+                    on_tool_call=on_tool_call,
                 )
                 request_context = RequestContext(
                     session_key=session_key,

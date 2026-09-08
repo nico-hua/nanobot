@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 InjectionCallback = Callable[[], Awaitable[Sequence[HumanMessage]]]
 TextDeltaCallback = Callable[[str], Awaitable[None]]
+ToolCallCallback = Callable[[ToolCallRequest], Awaitable[None]]
 
 
 class AgentRunnerError(RuntimeError):
@@ -39,6 +41,7 @@ class AgentRunSpec:
     is_goal_mode: bool = False
     injection_callback: InjectionCallback | None = None
     on_delta: TextDeltaCallback | None = None
+    on_tool_call: ToolCallCallback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.messages, Sequence) or not all(
@@ -72,6 +75,8 @@ class AgentRunSpec:
             raise TypeError("injection_callback must be callable or None")
         if self.on_delta is not None and not callable(self.on_delta):
             raise TypeError("on_delta must be callable or None")
+        if self.on_tool_call is not None and not callable(self.on_tool_call):
+            raise TypeError("on_tool_call must be callable or None")
         if self.is_goal_mode and self.injection_callback is None:
             raise ValueError("goal-mode runs require an injection_callback")
         if not self.is_goal_mode and self.injection_callback is not None:
@@ -182,6 +187,8 @@ class AgentRunner:
                     )
                 else:
                     logger.info("Executing requested tool (name=%s)", tool_call.name)
+                    if streaming:
+                        await _notify_tool_call(spec, tool_call)
                     result = await spec.tool_registry.execute(
                         tool_call.name,
                         tool_call.arguments,
@@ -237,3 +244,20 @@ async def _take_injected_messages(spec: AgentRunSpec) -> tuple[HumanMessage, ...
     if not all(isinstance(message, HumanMessage) for message in messages):
         raise TypeError("injection_callback must return only HumanMessage instances")
     return tuple(messages)
+
+
+async def _notify_tool_call(
+    spec: AgentRunSpec,
+    tool_call: ToolCallRequest,
+) -> None:
+    """Notify a presentation callback without affecting tool execution."""
+
+    if spec.on_tool_call is None:
+        return
+    try:
+        await spec.on_tool_call(tool_call)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Rendering a progress event must not make the Agent abandon its turn.
+        logger.exception("Agent tool-call callback failed")

@@ -76,6 +76,28 @@ test("the protocol parser accepts only the existing server event contract", () =
     parseServerEvent({ type: "delta", content: "Missing route" }),
     null,
   );
+  assert.deepEqual(
+    parseServerEvent({
+      type: "tool_call",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      tool_call: {
+        id: "call-1",
+        name: "read_file",
+        arguments: { path: "README.md" },
+      },
+    }),
+    {
+      type: "tool_call",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      tool_call: {
+        id: "call-1",
+        name: "read_file",
+        arguments: { path: "README.md" },
+      },
+    },
+  );
 });
 
 test("saved-session history replaces visible chat state without mixing sessions", () => {
@@ -89,7 +111,7 @@ test("saved-session history replaces visible chat state without mixing sessions"
 
   state = replaceChatHistory(state, [
     { role: "user", content: "New session message" },
-    { role: "assistant", content: "New session reply" },
+    { role: "assistant", content: "New session reply", toolCalls: [] },
   ]);
 
   assert.deepEqual(
@@ -186,7 +208,7 @@ test("the session API loads summaries and a selected transcript", async () => {
     ]);
     assert.deepEqual(history.messages, [
       { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi" },
+      { role: "assistant", content: "Hi", toolCalls: [] },
     ]);
     assert.deepEqual(requests, [
       "http://127.0.0.1:8000/v1/sessions",
@@ -244,6 +266,7 @@ test("deltas accumulate into one assistant message and turn_end does not duplica
     role: "assistant",
     content: "Hello Nanobot",
     isStreaming: true,
+    toolCalls: [],
   });
 
   state = applyServerEvent(state, {
@@ -259,8 +282,51 @@ test("deltas accumulate into one assistant message and turn_end does not duplica
     role: "assistant",
     content: "Hello Nanobot",
     isStreaming: false,
+    toolCalls: [],
   });
   assert.equal(state.isSending, false);
+});
+
+test("tool calls attach to the current streaming assistant response", () => {
+  let state = beginUserMessage(createInitialChatState(), "Read the README.");
+  state = applyServerEvent(state, {
+    type: "tool_call",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    tool_call: {
+      id: "call-1",
+      name: "read_file",
+      arguments: { path: "README.md" },
+    },
+  });
+  state = applyServerEvent(state, {
+    type: "delta",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "The README says ",
+  });
+  state = applyServerEvent(state, {
+    type: "turn_end",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "The README says hello.",
+    metadata: {},
+  });
+
+  assert.equal(state.messages.length, 2);
+  assert.deepEqual(state.messages[1], {
+    id: "assistant-2",
+    role: "assistant",
+    content: "The README says hello.",
+    isStreaming: false,
+    toolCalls: [
+      {
+        id: "call-1",
+        name: "read_file",
+        arguments: { path: "README.md" },
+      },
+    ],
+  });
 });
 
 test("server errors complete an active turn and remain visible", () => {
@@ -281,6 +347,7 @@ test("assistant output renders safe GitHub-flavored Markdown", () => {
       role: "assistant",
       content: "# Heading\n\n**bold** and `code`\n\n| A | B |\n| - | - |\n| 1 | 2 |",
       isStreaming: false,
+      toolCalls: [],
     }),
   );
 
@@ -288,6 +355,40 @@ test("assistant output renders safe GitHub-flavored Markdown", () => {
   assert.match(markup, /<strong>bold<\/strong>/);
   assert.match(markup, /<code>code<\/code>/);
   assert.match(markup, /<table>/);
+});
+
+test("assistant tool calls render as details instead of an empty Markdown reply", () => {
+  const markup = renderToStaticMarkup(
+    createElement(MessageContent, {
+      role: "assistant",
+      content: "",
+      isStreaming: false,
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "read_file",
+          arguments: { path: "README.md" },
+        },
+      ],
+    }),
+  );
+
+  assert.match(markup, /Called read_file/);
+  assert.match(markup, /README.md/);
+  assert.doesNotMatch(markup, /Thinking/);
+});
+
+test("an empty assistant response without tool calls still renders Thinking", () => {
+  const markup = renderToStaticMarkup(
+    createElement(MessageContent, {
+      role: "assistant",
+      content: "",
+      isStreaming: true,
+      toolCalls: [],
+    }),
+  );
+
+  assert.match(markup, /Thinking/);
 });
 
 test("user content remains plain text rather than Markdown", () => {

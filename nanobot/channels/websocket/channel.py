@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from aiohttp import WSCloseCode, WSMsgType, web
@@ -148,6 +149,29 @@ class WebSocketChannel(BaseChannel):
                         "chat_id": message.chat_id,
                         "session_id": message.session_id,
                         "content": message.content,
+                    },
+                )
+                return
+            if event == "tool_call":
+                tool_call = message.metadata.get("tool_call")
+                if (
+                    not isinstance(tool_call, Mapping)
+                    or not isinstance(tool_call.get("id"), str)
+                    or not isinstance(tool_call.get("name"), str)
+                    or not isinstance(tool_call.get("arguments"), Mapping)
+                ):
+                    raise ValueError("WebSocket tool_call events require call details")
+                await self._send_event(
+                    connection,
+                    {
+                        "type": "tool_call",
+                        "chat_id": message.chat_id,
+                        "session_id": message.session_id,
+                        "tool_call": {
+                            "id": tool_call["id"],
+                            "name": tool_call["name"],
+                            "arguments": dict(tool_call["arguments"]),
+                        },
                     },
                 )
                 return

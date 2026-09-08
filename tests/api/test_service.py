@@ -21,6 +21,7 @@ from nanobot.providers import (
     LLMProvider,
     LLMResponse,
     SystemMessage,
+    ToolCallRequest,
     ToolMessage,
 )
 from nanobot.session import Session, SessionManager
@@ -345,6 +346,51 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
             [
                 {"role": "user", "content": "First user message"},
                 {"role": "assistant", "content": "First assistant reply"},
+            ],
+        )
+
+    async def test_session_history_exposes_assistant_tool_calls_without_tool_results(
+        self,
+    ) -> None:
+        sessions = SessionManager(Path(self._temporary_directory.name) / "workspace")
+        tool_call = ToolCallRequest(
+            id="call-1",
+            name="read_file",
+            arguments={"path": "README.md"},
+        )
+        sessions.save(
+            Session.create("session-tools").with_messages(
+                (
+                    HumanMessage(content="Read the README."),
+                    AIMessage(content="", tool_calls=(tool_call,)),
+                    ToolMessage(content="Read result", tool_call_id="call-1"),
+                )
+            )
+        )
+        service = await self._start_service(RecordingLoop(), sessions)
+
+        status, history = await _http_request(
+            service,
+            "GET",
+            "/v1/sessions/session-tools",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            history["messages"],
+            [
+                {"role": "user", "content": "Read the README."},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "name": "read_file",
+                            "arguments": {"path": "README.md"},
+                        }
+                    ],
+                },
             ],
         )
 

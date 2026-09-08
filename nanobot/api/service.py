@@ -13,7 +13,7 @@ from aiohttp import web
 from ..agent import AgentLoop
 from ..bus import InboundMessage, OutboundMessage
 from ..config import ApiConfig
-from ..providers import BaseMessage
+from ..providers import AIMessage, BaseMessage
 from ..session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
@@ -334,19 +334,33 @@ def _session_summary(session: Session) -> dict[str, Any]:
 
 def _visible_message_records(
     messages: tuple[BaseMessage, ...],
-) -> list[dict[str, str]]:
-    """Keep the chat transcript separate from tool and system internals."""
+) -> list[dict[str, Any]]:
+    """Expose assistant tool requests while hiding tool results and system state."""
 
-    return [
-        {"role": message.role, "content": message.content}
-        for message in messages
-        if message.role in {"user", "assistant"}
-    ]
+    records: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role not in {"user", "assistant"}:
+            continue
+        record: dict[str, Any] = {"role": message.role, "content": message.content}
+        if isinstance(message, AIMessage) and message.tool_calls:
+            record["tool_calls"] = [
+                {
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": dict(tool_call.arguments),
+                }
+                for tool_call in message.tool_calls
+            ]
+        records.append(record)
+    return records
 
 
-def _preview(messages: list[dict[str, str]], *, limit: int = 120) -> str:
+def _preview(messages: list[dict[str, Any]], *, limit: int = 120) -> str:
     for message in reversed(messages):
-        content = " ".join(message["content"].split())
+        content_value = message.get("content")
+        if not isinstance(content_value, str):
+            continue
+        content = " ".join(content_value.split())
         if content:
             return content if len(content) <= limit else f"{content[:limit - 1]}…"
     return ""

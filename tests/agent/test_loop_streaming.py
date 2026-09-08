@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus
@@ -17,9 +18,11 @@ from nanobot.providers import (
     LLMProvider,
     LLMResponse,
     TokenUsage,
+    ToolCallRequest,
+    ToolMessage,
 )
 from nanobot.session import SessionManager
-from nanobot.tools import Tool, ToolRegistry
+from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
 
 class RecordingProvider(LLMProvider):
@@ -58,6 +61,59 @@ class RecordingProvider(LLMProvider):
             finish_reason="stop",
             usage=TokenUsage(5, 2, 7),
         )
+
+
+class ToolCallingStreamingProvider(LLMProvider):
+    """Provider double that requests a tool before yielding final text."""
+
+    def __init__(self, tool_call: ToolCallRequest) -> None:
+        self._tool_call = tool_call
+        self.stream_calls = 0
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        raise AssertionError("Tool streaming test must not use completion")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        self.stream_calls += 1
+        if self.stream_calls == 1:
+            return LLMResponse(tool_calls=(self._tool_call,))
+        if on_delta is not None:
+            await on_delta("Done.")
+        return LLMResponse(content="Done.", finish_reason="stop")
+
+
+class EchoTool(Tool):
+    def __init__(self) -> None:
+        super().__init__(
+            "echo",
+            "Echo a supplied value.",
+            parameters=(
+                ToolParameter(
+                    name="value",
+                    description="Value to echo.",
+                    type="string",
+                    required=True,
+                ),
+            ),
+        )
+
+    async def execute(self, **arguments: Any) -> ToolResult:
+        return ToolResult(content=f"echo: {arguments['value']}")
 
 
 class AgentLoopStreamingTest(unittest.IsolatedAsyncioTestCase):
@@ -126,17 +182,65 @@ class AgentLoopStreamingTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_streaming_publishes_tool_call_before_text_and_turn_end(self) -> None:
+        request = ToolCallRequest(
+            id="call-1",
+            name="echo",
+            arguments={"value": "Beijing"},
+        )
+        provider = ToolCallingStreamingProvider(request)
+        bus = MessageBus()
+        loop = self._loop(provider, message_bus=bus, tools=(EchoTool(),))
+
+        response = await loop.process_inbound(
+            self._inbound("Call the tool.", metadata={"streaming": True})
+        )
+
+        tool_event = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        delta = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        turn_end = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        self.assertIsNone(response)
+        self.assertEqual(tool_event.content, "")
+        self.assertEqual(
+            tool_event.metadata,
+            {
+                "streaming": True,
+                "event": "tool_call",
+                "tool_call": {
+                    "id": "call-1",
+                    "name": "echo",
+                    "arguments": {"value": "Beijing"},
+                },
+            },
+        )
+        self.assertEqual(delta.metadata["event"], "delta")
+        self.assertEqual(delta.content, "Done.")
+        self.assertEqual(turn_end.metadata["event"], "turn_end")
+        self.assertEqual(turn_end.content, "Done.")
+
+        session = loop._session_manager.get_or_create("session-1")
+        self.assertEqual(
+            session.messages,
+            (
+                HumanMessage(content="Call the tool."),
+                AIMessage(content="", tool_calls=(request,)),
+                ToolMessage(content="echo: Beijing", tool_call_id="call-1"),
+                AIMessage(content="Done."),
+            ),
+        )
+
     def _loop(
         self,
-        provider: RecordingProvider,
+        provider: LLMProvider,
         *,
         message_bus: MessageBus | None = None,
+        tools: Sequence[Tool] = (),
     ) -> AgentLoop:
         workspace = Path(self._temporary_directory.name) / "workspace"
         return AgentLoop(
             AgentRunner(),
             provider,
-            ToolRegistry(),
+            ToolRegistry(tools),
             SessionManager(workspace),
             ContextBuilder(workspace),
             message_bus=message_bus,

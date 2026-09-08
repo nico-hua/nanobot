@@ -2,8 +2,8 @@
 
 This directory is an independent React + TypeScript + Vite frontend for the
 Nanobot project. It connects to the existing WebSocket Channel for normal and
-streaming assistant responses, and uses the local HTTP API to list and load
-persisted sessions.
+streaming assistant responses, including tool-call progress, and uses the local
+HTTP API to list and load persisted sessions.
 
 ## Configuration
 
@@ -21,8 +21,17 @@ The frontend reads the following browser-visible values from the repository-root
 The left sidebar displays persisted sessions returned by `GET /v1/sessions`.
 Selecting one loads its user/assistant transcript through
 `GET /v1/sessions/{session_id}` and uses that ID for subsequent WebSocket
-messages. **New session** creates a browser-side unique ID and clears only the
-current UI; it is persisted by Nanobot after the first message is sent.
+messages. Assistant tool calls are shown with the historical response, while
+tool results remain internal. **New session** creates a browser-side unique ID
+and clears only the current UI; it is persisted by Nanobot after the first
+message is sent.
+
+## Streaming events
+
+For a streaming response, the WebSocket protocol can send `tool_call` events
+before text `delta` events. The UI attaches each tool's name and formatted
+arguments to the current assistant response, then uses `turn_end` to finalize
+the complete text without creating a duplicate message.
 
 ## Prerequisites
 
@@ -58,9 +67,9 @@ npm test
 ```
 
 This runs Node's built-in test runner against WebSocket and session UI state,
-covering connection status, client message shape, delta accumulation, turn
-completion, session API parsing, session switching, and error handling. No
-browser-test dependency is required.
+covering connection status, client message shape, tool-call and delta
+accumulation, turn completion, session API parsing, session switching, and
+error handling. No browser-test dependency is required.
 
 If npm reports an internal npm `edgesOut` error after dependencies change,
 remove the generated install state and install again:

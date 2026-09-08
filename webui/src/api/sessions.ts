@@ -2,6 +2,7 @@ import type {
   PersistedSessionMessage,
   SessionHistory,
   SessionInfo,
+  ToolCall,
 } from "../types/protocol.js";
 
 export type { SessionHistory, SessionInfo } from "../types/protocol.js";
@@ -104,10 +105,41 @@ function parseHistoryMessage(value: unknown): PersistedSessionMessage {
   if (!isRecord(value) || (value.role !== "user" && value.role !== "assistant")) {
     throw invalidResponse();
   }
+  if (value.role === "user") {
+    return {
+      role: "user",
+      content: requiredText(value.content),
+    };
+  }
   return {
-    role: value.role,
+    role: "assistant",
     content: requiredText(value.content),
+    toolCalls: parseToolCalls(value.tool_calls),
   };
+}
+
+function parseToolCalls(value: unknown): ToolCall[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw invalidResponse();
+  }
+  return value.map((toolCall) => {
+    if (
+      !isRecord(toolCall) ||
+      typeof toolCall.id !== "string" ||
+      typeof toolCall.name !== "string" ||
+      !isRecord(toolCall.arguments)
+    ) {
+      throw invalidResponse();
+    }
+    return {
+      id: toolCall.id,
+      name: toolCall.name,
+      arguments: toolCall.arguments,
+    };
+  });
 }
 
 function requiredText(value: unknown): string {
@@ -131,5 +163,5 @@ function invalidResponse(): SessionApiError {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   PersistedSessionMessage,
   ServerEvent,
+  ToolCall,
 } from "../types/protocol.js";
 
 export type { ChatMessage } from "../types/protocol.js";
@@ -51,6 +52,7 @@ export function replaceChatHistory(
             role: "assistant",
             content: message.content,
             isStreaming: false,
+            toolCalls: message.toolCalls,
           },
   );
   return {
@@ -129,6 +131,8 @@ export function applyServerEvent(state: ChatState, event: ServerEvent): ChatStat
       );
     case "delta":
       return appendAssistantDelta(state, event.content);
+    case "tool_call":
+      return appendAssistantToolCall(state, event.tool_call);
     case "message":
     case "turn_end":
       // The final event has the complete response, so replace the accumulated
@@ -160,6 +164,7 @@ function appendAssistantDelta(state: ChatState, content: string): ChatState {
           role: "assistant",
           content,
           isStreaming: true,
+          toolCalls: [],
         },
       ],
     };
@@ -170,6 +175,41 @@ function appendAssistantDelta(state: ChatState, content: string): ChatState {
     messages: state.messages.map((message) =>
       message.id === state.activeAssistantId
         ? { ...message, content: `${message.content}${content}` }
+        : message,
+    ),
+  };
+}
+
+function appendAssistantToolCall(state: ChatState, toolCall: ToolCall): ChatState {
+  if (state.activeAssistantId === null) {
+    const { id, nextMessageSequence } = nextMessageId(state, "assistant");
+    return {
+      ...state,
+      activeAssistantId: id,
+      nextMessageSequence,
+      messages: [
+        ...state.messages,
+        {
+          id,
+          role: "assistant",
+          content: "",
+          isStreaming: true,
+          toolCalls: [toolCall],
+        },
+      ],
+    };
+  }
+
+  return {
+    ...state,
+    messages: state.messages.map((message) =>
+      message.id === state.activeAssistantId && message.role === "assistant"
+        ? {
+            ...message,
+            toolCalls: message.toolCalls.some((item) => item.id === toolCall.id)
+              ? message.toolCalls
+              : [...message.toolCalls, toolCall],
+          }
         : message,
     ),
   };
@@ -218,6 +258,7 @@ function withAssistantFinished(
           role: "assistant",
           content,
           isStreaming: false,
+          toolCalls: [],
         },
       ],
     };

@@ -8,7 +8,7 @@
 - Provider 无关的消息、工具调用和 `LLMResponse` 模型。
 - 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
-- 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
+- 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus；流式工具执行前可单独通知调用方工具名称和参数。
 - QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话。
 - 基于 `aiohttp` 的最小本地 HTTP API：`GET /health`、`POST /v1/messages`、`GET /v1/sessions` 与 `GET /v1/sessions/{session_id}`。写请求经 `AgentLoop` 处理并同步返回结果；只读会话接口经 `SessionManager` 返回可见历史，保留 Session、命令、目标模式和工具调用边界。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。当前 turn 仅在 `AgentRunner` 成功返回完整结果后原子保存，失败或取消不会留下半截历史。
@@ -80,7 +80,7 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
   -Body '{"session_id":"example-session","content":"你好"}'
 ```
 
-`POST /v1/messages` 返回 `session_id` 和最终 `content`。`session_id` 会作为稳定的会话标识；请求超时、输入校验和 Agent 处理失败会返回对应的 JSON HTTP 错误。`GET /v1/sessions` 返回按最近更新时间排序的 session 摘要；`GET /v1/sessions/{session_id}` 返回该 session 的 user/assistant 可见历史，不暴露 system prompt 或工具内部消息。
+`POST /v1/messages` 返回 `session_id` 和最终 `content`。`session_id` 会作为稳定的会话标识；请求超时、输入校验和 Agent 处理失败会返回对应的 JSON HTTP 错误。`GET /v1/sessions` 返回按最近更新时间排序的 session 摘要；`GET /v1/sessions/{session_id}` 返回该 session 的 user/assistant 可见历史及 assistant 发起的 tool call，不暴露 system prompt 或 tool result。
 
 当 `channel.default` 为 `websocket` 时，可连接 `ws://127.0.0.1:8765/ws`。连接成功会收到 `ready` 事件；客户端可发送：
 
@@ -88,11 +88,11 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
 {"type":"message","chat_id":"example-chat","content":"你好"}
 ```
 
-服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
+服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，工具实际执行前先返回包含工具 ID、名称和参数的 `tool_call`，随后按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
 
 ## Web UI
 
-`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `delta` 与 `turn_end` 事件间累积展示流式回复；通过本地只读 HTTP API 显示持久化会话列表和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
+`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `tool_call`、`delta` 与 `turn_end` 事件间展示工具进度和累积流式回复；通过本地只读 HTTP API 显示持久化会话列表、历史 assistant tool call 和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
 
 ```powershell
 cd webui
@@ -124,7 +124,7 @@ npm run build
 
 ## 有意留到后续的能力
 
-- 并行工具调度、重试与 fallback，以及工具调用和 reasoning 的流式事件。
+- 并行工具调度、重试与 fallback，以及工具执行结果和 reasoning 的流式事件。
 - 真实 tokenizer、上下文摘要的多级策略和长期记忆冲突解决。
 - 多进程/分布式锁、记忆事件归档与可靠任务恢复。
 - 除 QQ 和 WebSocket 外的真实 Channel、消息可靠投递与总线持久化。

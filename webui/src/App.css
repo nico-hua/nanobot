@@ -356,6 +356,45 @@
   box-shadow: 0 0.5rem 1.5rem rgba(23, 35, 30, 0.04);
 }
 
+.tool-calls {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 0.8rem;
+}
+
+.tool-call {
+  overflow: hidden;
+  border: 1px solid #cfe0d6;
+  border-radius: 0.55rem;
+  background: #f3f8f5;
+}
+
+.tool-call summary {
+  padding: 0.45rem 0.6rem;
+  color: #255444;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.tool-call pre {
+  margin: 0;
+  padding: 0.65rem;
+  overflow-x: auto;
+  border-top: 1px solid #cfe0d6;
+  color: #e8f3ec;
+  background: #1f3028;
+}
+
+.tool-call code {
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 .message__markdown > :first-child {
   margin-top: 0;
 }

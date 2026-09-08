@@ -236,6 +236,40 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
             ToolMessage(content="recorded: Beijing", tool_call_id="call-1"),
         )
 
+    async def test_stream_reports_a_tool_call_before_executing_it(self) -> None:
+        request = tool_call("call-1", "record", value="Beijing")
+        provider = StreamingProvider(
+            (
+                LLMResponse(tool_calls=(request,)),
+                LLMResponse(content="Recorded.", finish_reason="stop"),
+            ),
+            ((), ("Recorded.",)),
+        )
+        execution_order: list[str] = []
+        reported_calls: list[ToolCallRequest] = []
+
+        class OrderedRecordingTool(RecordingTool):
+            async def execute(self, **arguments: Any) -> ToolResult:
+                execution_order.append("execute")
+                return await super().execute(**arguments)
+
+        async def on_tool_call(tool_call: ToolCallRequest) -> None:
+            execution_order.append("callback")
+            reported_calls.append(tool_call)
+
+        result = await AgentRunner().run_stream(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Record Beijing."),),
+                provider=provider,
+                tool_registry=ToolRegistry((OrderedRecordingTool(),)),
+                on_tool_call=on_tool_call,
+            )
+        )
+
+        self.assertEqual(result.content, "Recorded.")
+        self.assertEqual(reported_calls, [request])
+        self.assertEqual(execution_order, ["callback", "execute"])
+
     async def test_executes_a_tool_and_returns_the_follow_up_response(self) -> None:
         request = tool_call("call-1", "record", value="Beijing")
         provider = ScriptedProvider(
