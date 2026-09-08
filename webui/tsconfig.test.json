@@ -5,10 +5,15 @@
     "moduleResolution": "NodeNext",
     "strict": true,
     "skipLibCheck": true,
-    "rootDir": "./src/hooks",
+    "rootDir": "./src",
     "outDir": "./.test-build",
     "noEmit": false,
-    "declaration": false
+    "declaration": false,
+    "jsx": "react-jsx"
   },
-  "include": ["src/hooks/chatState.ts"]
+  "include": [
+    "src/components/MessageContent.tsx",
+    "src/conversationScroll.ts",
+    "src/hooks/chatState.ts"
+  ]
 }

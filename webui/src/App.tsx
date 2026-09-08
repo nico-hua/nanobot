@@ -1,5 +1,7 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
+import { MessageContent } from "./components/MessageContent";
+import { isNearConversationBottom } from "./conversationScroll";
 import {
   type ConnectionStatus,
   useNanobotWebSocket,
@@ -18,6 +20,8 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
 
 function App() {
   const [draft, setDraft] = useState("");
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const shouldFollowLatestRef = useRef(true);
   const {
     connectionStatus,
     error,
@@ -34,9 +38,26 @@ function App() {
     connectionStatus === "connected" && !isSending && draft.trim(),
   );
 
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation === null || !shouldFollowLatestRef.current) {
+      return;
+    }
+    conversation.scrollTop = conversation.scrollHeight;
+  }, [messages]);
+
+  function handleConversationScroll() {
+    const conversation = conversationRef.current;
+    if (conversation !== null) {
+      shouldFollowLatestRef.current = isNearConversationBottom(conversation);
+    }
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (sendMessage(draft)) {
+      // A sent message intentionally returns the reader to the active turn.
+      shouldFollowLatestRef.current = true;
       setDraft("");
     }
   }
@@ -59,38 +80,44 @@ function App() {
           </span>
         </div>
 
-        {error !== null ? (
-          <p className="connection-error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <div className="chat-panel__body">
+          {error !== null ? (
+            <p className="connection-error" role="alert">
+              {error}
+            </p>
+          ) : null}
 
-        {messages.length === 0 ? (
-          <div className="chat-empty-state">
-            <p>No messages yet.</p>
-            <span>
-              {connectionStatus === "connected"
-                ? "Send a message to start a conversation."
-                : "Waiting for the local Nanobot connection."}
-            </span>
-          </div>
-        ) : (
-          <ol className="message-list" aria-live="polite">
-            {messages.map((message) => (
-              <li
-                key={message.id}
-                className={`message message--${message.role}`}
-              >
-                <span className="message__author">
-                  {message.role === "user" ? "You" : "Nanobot"}
+          <div
+            ref={conversationRef}
+            className="conversation-scroll"
+            onScroll={handleConversationScroll}
+          >
+            {messages.length === 0 ? (
+              <div className="chat-empty-state">
+                <p>No messages yet.</p>
+                <span>
+                  {connectionStatus === "connected"
+                    ? "Send a message to start a conversation."
+                    : "Waiting for the local Nanobot connection."}
                 </span>
-                <p className={message.isStreaming ? "message__content is-streaming" : "message__content"}>
-                  {message.content || "Thinking..."}
-                </p>
-              </li>
-            ))}
-          </ol>
-        )}
+              </div>
+            ) : (
+              <ol className="message-list" aria-live="polite">
+                {messages.map((message) => (
+                  <li
+                    key={message.id}
+                    className={`message message--${message.role}`}
+                  >
+                    <span className="message__author">
+                      {message.role === "user" ? "You" : "Nanobot"}
+                    </span>
+                    <MessageContent {...message} />
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
       </section>
 
       <form className="composer" aria-label="Message composer" onSubmit={handleSubmit}>
@@ -102,7 +129,7 @@ function App() {
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Ask Nanobot anything..."
-            rows={3}
+            rows={2}
             disabled={isSending}
           />
           <button type="submit" disabled={!canSend}>
