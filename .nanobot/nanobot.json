@@ -25,10 +25,14 @@
         "temperature": 0.7
     },
     "channel": {
-        "default": "websocket",
+        "default": "qq",
+        "qq": {
+            "streaming": false
+        },
         "websocket": {
             "host": "127.0.0.1",
-            "port": 8765
+            "port": 8765,
+            "streaming": true
         }
     },
     "mcp": {

@@ -13,6 +13,7 @@ from .schema import (
     NanobotFileConfig,
     ProviderConfig,
     QQChannelConfig,
+    QQChannelSettingsConfig,
 )
 
 DEFAULT_CONFIG_PATH = Path(".nanobot/nanobot.json")
@@ -77,7 +78,7 @@ def load_nanobot_config(
         default_channel=file_config.channel.default,
         websocket=file_config.channel.websocket,
         mcp_servers=file_config.mcp.servers,
-        qq=_load_qq_config(env_path),
+        qq=_load_qq_config(env_path, file_config.channel.qq),
         provider=ProviderConfig(
             api_key=api_key,
             **file_config.provider.model_dump(),
@@ -107,7 +108,10 @@ def get_env_value(name: str, env_path: str | Path = DEFAULT_ENV_PATH) -> str | N
     return None
 
 
-def _load_qq_config(env_path: str | Path) -> QQChannelConfig | None:
+def _load_qq_config(
+    env_path: str | Path,
+    settings: QQChannelSettingsConfig,
+) -> QQChannelConfig | None:
     app_id = get_env_value(_QQ_APP_ID_ENV_VAR, env_path)
     secret = get_env_value(_QQ_SECRET_ENV_VAR, env_path)
     if not app_id and not secret:
@@ -126,6 +130,7 @@ def _load_qq_config(env_path: str | Path) -> QQChannelConfig | None:
             app_id=app_id,
             secret=secret,
             allow_from=allowed_senders or ["*"],
+            streaming=settings.streaming,
         )
     except ValidationError as exc:
         raise ConfigError("QQ configuration does not match the expected schema") from exc

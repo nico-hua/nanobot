@@ -38,7 +38,11 @@ class EchoProvider(LLMProvider):
         temperature: float | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> LLMResponse:
-        raise AssertionError("WebSocket Channel tests do not use streaming")
+        del tools, max_tokens, temperature
+        content = f"Reply: {messages[-1].content}"
+        if on_delta is not None:
+            await on_delta(content)
+        return LLMResponse(content=content)
 
 
 class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +96,7 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
                 sender_id="websocket",
                 session_id="session-1",
                 content="Hello",
+                metadata={"streaming": True},
             ),
         )
 
@@ -111,6 +116,7 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
 
         inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
         self.assertEqual(inbound.session_id, "websocket:chat-1")
+        self.assertTrue(inbound.metadata["streaming"])
 
     async def test_outbound_messages_are_sent_only_to_the_matching_session(self) -> None:
         bus = MessageBus()
@@ -143,12 +149,41 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
                 "content": "Reply one",
             },
         )
-        self.assertEqual(
-            await first.receive_json(timeout=1),
-            {"type": "turn_end", "session_id": "session-1"},
-        )
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(first.receive(), timeout=0.05)
         with self.assertRaises(TimeoutError):
             await asyncio.wait_for(second.receive(), timeout=0.05)
+
+    async def test_delta_outbound_message_uses_a_delta_event_without_turn_end(self) -> None:
+        bus = MessageBus()
+        channel = await self._start_channel(bus)
+        socket = await self._connect(channel)
+        await socket.receive_json(timeout=1)
+        await self._send_client_message(socket, "chat-1", "session-1", "Hello")
+        await bus.consume_inbound()
+
+        await channel.send(
+            OutboundMessage(
+                channel="websocket",
+                chat_id="chat-1",
+                sender_id="websocket",
+                session_id="session-1",
+                content="Partial reply",
+                metadata={"event": "delta"},
+            )
+        )
+
+        self.assertEqual(
+            await socket.receive_json(timeout=1),
+            {
+                "type": "delta",
+                "chat_id": "chat-1",
+                "session_id": "session-1",
+                "content": "Partial reply",
+            },
+        )
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(socket.receive(), timeout=0.05)
 
     async def test_invalid_client_message_returns_an_error_event(self) -> None:
         channel = await self._start_channel(MessageBus())
@@ -215,7 +250,7 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 await socket.receive_json(timeout=1),
                 {
-                    "type": "message",
+                    "type": "delta",
                     "chat_id": "chat-1",
                     "session_id": "session-1",
                     "content": "Reply: Hello Agent",
@@ -223,7 +258,19 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 await socket.receive_json(timeout=1),
-                {"type": "turn_end", "session_id": "session-1"},
+                {
+                    "type": "turn_end",
+                    "chat_id": "chat-1",
+                    "session_id": "session-1",
+                    "content": "Reply: Hello Agent",
+                    "metadata": {
+                        "streaming": True,
+                        "event": "turn_end",
+                        "tools_used": [],
+                        "token_usage": None,
+                        "stop_reason": None,
+                    },
+                },
             )
         finally:
             worker.cancel()

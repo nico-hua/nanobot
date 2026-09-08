@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
@@ -401,6 +402,7 @@ class AgentLoop:
         if task is None:
             raise RuntimeError("AgentLoop requires a running asyncio task")
         is_goal_turn = _is_goal_message(inbound)
+        is_streaming = _is_streaming_message(inbound)
         if is_goal_turn and not self._has_active_goal(session_key):
             # A new /goal persists its active GoalState before publishing this
             # message. Therefore this only rejects stale source=goal messages
@@ -439,6 +441,23 @@ class AgentLoop:
                         _CONTEXT_WINDOW_EXCEEDED_MESSAGE,
                     )
 
+                message_bus = self._message_bus
+                on_delta = None
+                if is_streaming and message_bus is not None:
+
+                    async def publish_delta(chunk: str) -> None:
+                        # Provider and runner await this callback, preserving
+                        # chunk order all the way to the outbound queue.
+                        await message_bus.publish_outbound(
+                            _outbound_message(
+                                inbound,
+                                chunk,
+                                metadata={**inbound.metadata, "event": "delta"},
+                            )
+                        )
+
+                    on_delta = publish_delta
+
                 spec = AgentRunSpec(
                     messages=request_messages,
                     provider=self._provider,
@@ -451,6 +470,7 @@ class AgentLoop:
                     )
                     if is_goal_turn
                     else None,
+                    on_delta=on_delta,
                 )
                 request_context = RequestContext(
                     session_key=session_key,
@@ -461,7 +481,11 @@ class AgentLoop:
                     is_goal_mode=is_goal_turn,
                 )
                 with bind_request_context(request_context):
-                    result = await self._runner.run(spec)
+                    result = await (
+                        self._runner.run_stream(spec)
+                        if is_streaming
+                        else self._runner.run(spec)
+                    )
                 completed_messages = _without_system_messages(
                     result.messages[len(spec.messages) :]
                 )
@@ -481,6 +505,38 @@ class AgentLoop:
                     )
                 if result.stop_reason == "max_iterations":
                     return _outbound_message(inbound, _MAX_ITERATIONS_MESSAGE)
+                if is_streaming and on_delta is not None:
+                    # Deltas have already been published through MessageBus.
+                    # End the client turn without repeating the full text.
+                    await message_bus.publish_outbound(
+                        _outbound_message(
+                            inbound,
+                            result.content or "",
+                            metadata={
+                                **inbound.metadata,
+                                "event": "turn_end",
+                                "tools_used": [
+                                    {
+                                        "id": tool_call.id,
+                                        "name": tool_call.name,
+                                        "arguments": dict(tool_call.arguments),
+                                    }
+                                    for tool_call in result.tools_used
+                                ],
+                                "token_usage": (
+                                    {
+                                        "prompt_tokens": result.token_usage.prompt_tokens,
+                                        "completion_tokens": result.token_usage.completion_tokens,
+                                        "total_tokens": result.token_usage.total_tokens,
+                                    }
+                                    if result.token_usage is not None
+                                    else None
+                                ),
+                                "stop_reason": result.stop_reason,
+                            },
+                        )
+                    )
+                    return None
                 return _outbound_message(inbound, result.content or "")
         except asyncio.CancelledError:
             if is_goal_turn:
@@ -822,6 +878,8 @@ def _require_command_reply(reply: OutboundMessage | None) -> OutboundMessage:
 def _outbound_message(
     inbound: InboundMessage,
     content: str,
+    *,
+    metadata: Mapping[str, Any] | None = None,
 ) -> OutboundMessage:
     return OutboundMessage(
         channel=inbound.channel,
@@ -829,7 +887,7 @@ def _outbound_message(
         sender_id=inbound.sender_id,
         session_id=inbound.session_id,
         content=content,
-        metadata=inbound.metadata,
+        metadata=inbound.metadata if metadata is None else metadata,
     )
 
 def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMessage, ...]:
@@ -838,6 +896,12 @@ def _without_system_messages(messages: tuple[BaseMessage, ...]) -> tuple[BaseMes
 
 def _is_goal_message(inbound: InboundMessage) -> bool:
     return inbound.metadata.get("source") == "goal"
+
+
+def _is_streaming_message(inbound: InboundMessage) -> bool:
+    """Return whether this channel enabled text streaming for the message."""
+
+    return inbound.metadata.get("streaming") is True
 
 
 def _is_goal_continuation_message(inbound: InboundMessage) -> bool:

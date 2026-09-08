@@ -1,4 +1,4 @@
-"""Minimal non-streaming agent execution loop."""
+"""Minimal agent execution loop with optional text streaming."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from ..tools import ToolRegistry
 logger = logging.getLogger(__name__)
 
 InjectionCallback = Callable[[], Awaitable[Sequence[HumanMessage]]]
+TextDeltaCallback = Callable[[str], Awaitable[None]]
 
 
 class AgentRunnerError(RuntimeError):
@@ -37,6 +38,7 @@ class AgentRunSpec:
     blocked_tool_names: Sequence[str] = ()
     is_goal_mode: bool = False
     injection_callback: InjectionCallback | None = None
+    on_delta: TextDeltaCallback | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.messages, Sequence) or not all(
@@ -68,6 +70,8 @@ class AgentRunSpec:
             raise TypeError("is_goal_mode must be a boolean")
         if self.injection_callback is not None and not callable(self.injection_callback):
             raise TypeError("injection_callback must be callable or None")
+        if self.on_delta is not None and not callable(self.on_delta):
+            raise TypeError("on_delta must be callable or None")
         if self.is_goal_mode and self.injection_callback is None:
             raise ValueError("goal-mode runs require an injection_callback")
         if not self.is_goal_mode and self.injection_callback is not None:
@@ -94,6 +98,21 @@ class AgentRunner:
     async def run(self, spec: AgentRunSpec) -> AgentRunResult:
         """Run tool-call rounds until a final response or iteration boundary."""
 
+        return await self._run(spec, streaming=False)
+
+    async def run_stream(self, spec: AgentRunSpec) -> AgentRunResult:
+        """Run tool-call rounds while forwarding text deltas to ``spec.on_delta``."""
+
+        return await self._run(spec, streaming=True)
+
+    async def _run(
+        self,
+        spec: AgentRunSpec,
+        *,
+        streaming: bool,
+    ) -> AgentRunResult:
+        """Execute the shared sequential tool loop for one provider request mode."""
+
         conversation = list(spec.messages)
         tools_used: list[ToolCallRequest] = []
         token_usage: TokenUsage | None = None
@@ -111,9 +130,14 @@ class AgentRunner:
         )
         for iteration in range(spec.max_iterations):
             logger.debug("Requesting provider completion (iteration=%d)", iteration + 1)
-            response = await spec.provider.complete(
-                conversation,
-                tools=tools or None,
+            response = await (
+                spec.provider.stream(
+                    conversation,
+                    tools=tools or None,
+                    on_delta=spec.on_delta,
+                )
+                if streaming
+                else spec.provider.complete(conversation, tools=tools or None)
             )
             token_usage = _combine_token_usage(token_usage, response.usage)
             if not response.tool_calls:

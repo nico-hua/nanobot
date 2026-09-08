@@ -98,6 +98,7 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inbound.session_id, "qq:user-1")
         self.assertEqual(inbound.metadata["message_id"], "c2c-message-1")
         self.assertEqual(inbound.metadata["qq_chat_type"], "c2c")
+        self.assertFalse(inbound.metadata["streaming"])
 
     async def test_converts_group_at_message_to_inbound_message(self) -> None:
         bus = MessageBus()
@@ -112,6 +113,7 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inbound.session_id, "qq:group-1")
         self.assertEqual(inbound.metadata["message_id"], "group-message-1")
         self.assertEqual(inbound.metadata["qq_chat_type"], "group")
+        self.assertFalse(inbound.metadata["streaming"])
 
     async def test_sends_markdown_with_the_matching_qq_api(self) -> None:
         bus = MessageBus()

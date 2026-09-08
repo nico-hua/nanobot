@@ -8,7 +8,7 @@
 - Provider 无关的消息、工具调用和 `LLMResponse` 模型。
 - 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
-- 最小 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
+- 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
 - QQ 文本 Channel 与最小 WebSocket Channel、ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信。
 - 基于 `aiohttp` 的最小本地 HTTP API：`GET /health` 和 `POST /v1/messages`。请求经 `AgentLoop` 处理并同步返回结果，保留 Session、命令、目标模式和工具调用行为。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。当前 turn 仅在 `AgentRunner` 成功返回完整结果后原子保存，失败或取消不会留下半截历史。
@@ -32,7 +32,7 @@ HTTP API 为了返回当前请求的响应，会直接调用 `AgentLoop.process_
 ## 配置
 
 - `.env` 保存敏感配置，例如 `NANOBOT_API_KEY` 和 QQ 凭据；可从 `.env.example` 开始填写。
-- `.nanobot/nanobot.json` 保存非敏感运行配置。`workspace` 是共享根目录；`agent` 包含上下文与压缩预算，`cron` 包含时区，`channel` 包含默认 Channel 与 WebSocket 设置，`mcp.servers` 保存 MCP Server 列表；Provider、日志和本地 HTTP API 分别位于 `provider`、`logging` 与 `api` 区块。
+- `.nanobot/nanobot.json` 保存非敏感运行配置。`workspace` 是共享根目录；`agent` 包含上下文与压缩预算，`cron` 包含时区，`channel` 包含默认 Channel、QQ/WebSocket 设置及其 `streaming` 开关，`mcp.servers` 保存 MCP Server 列表；Provider、日志和本地 HTTP API 分别位于 `provider`、`logging` 与 `api` 区块。
 - workspace 是 Agent 可操作与存储运行时数据的范围。Session、长期记忆和记忆事件默认写入 workspace，项目的 `/.nanobot/workspace/` 已被 Git 忽略。
 
 不要把 API key、QQ secret、Session 内容或 workspace 运行时数据提交到仓库。
@@ -87,7 +87,7 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
 {"type":"message","chat_id":"example-chat","content":"你好"}
 ```
 
-服务会将同一 session 的 Agent 输出以 `message`、`error` 或 `turn_end` 事件返回对应连接。当前不提供认证、流式 delta 或重连恢复，因此仅适合受信任的本地开发环境。
+服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
 
 ## 测试
 
@@ -103,11 +103,11 @@ python -B -m unittest discover -s tests -t . -p "test*.py"
 
 ## 有意留到后续的能力
 
-- 流式 AgentRunner、并行工具调度、重试与 fallback。
+- 并行工具调度、重试与 fallback，以及工具调用和 reasoning 的流式事件。
 - 真实 tokenizer、上下文摘要的多级策略和长期记忆冲突解决。
 - 多进程/分布式锁、记忆事件归档与可靠任务恢复。
 - 除 QQ 和 WebSocket 外的真实 Channel、消息可靠投递与总线持久化。
-- HTTP API 的认证、流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket 的认证、流式 delta、多会话订阅、广播与重连恢复。
+- HTTP API 的认证、流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket 的认证、多会话订阅、广播与重连恢复。
 - 完整 JSON Schema 校验、工具插件生态及更复杂的安全沙箱。
 - Skill 的自动选择、安装/更新、脚本执行、权限控制与插件来源。
 

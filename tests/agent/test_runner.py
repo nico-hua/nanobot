@@ -54,6 +54,51 @@ class ScriptedProvider(LLMProvider):
         raise AssertionError("AgentRunner must not use streaming")
 
 
+class StreamingProvider(LLMProvider):
+    def __init__(
+        self,
+        responses: Sequence[LLMResponse],
+        deltas_by_response: Sequence[Sequence[str]],
+    ) -> None:
+        self._responses = iter(responses)
+        self._deltas_by_response = iter(deltas_by_response)
+        self.stream_calls: list[
+            tuple[tuple[BaseMessage, ...], tuple[Tool, ...] | None]
+        ] = []
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        raise AssertionError("Streaming AgentRunner must not use completion")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        del max_tokens, temperature
+        self.stream_calls.append(
+            (tuple(messages), tuple(tools) if tools is not None else None)
+        )
+        try:
+            response = next(self._responses)
+        except StopIteration as exc:
+            raise AssertionError("Provider received an unexpected streaming request") from exc
+
+        for delta in next(self._deltas_by_response, ()):
+            if on_delta is not None:
+                await on_delta(delta)
+        return response
+
+
 class RecordingTool(Tool):
     def __init__(self, name: str = "record") -> None:
         super().__init__(
@@ -118,6 +163,78 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(tool.calls, [])
         self.assertEqual(provider.complete_calls, [(messages, (tool,))])
+
+    async def test_stream_forwards_text_deltas_and_returns_provider_response(
+        self,
+    ) -> None:
+        provider = StreamingProvider(
+            (LLMResponse(content="Hello.", finish_reason="stop"),),
+            (("Hel", "lo."),),
+        )
+        received_deltas: list[str] = []
+
+        async def on_delta(delta: str) -> None:
+            received_deltas.append(delta)
+
+        result = await AgentRunner().run_stream(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Say hello."),),
+                provider=provider,
+                tool_registry=ToolRegistry(),
+                on_delta=on_delta,
+            )
+        )
+
+        self.assertEqual(received_deltas, ["Hel", "lo."])
+        self.assertEqual(result.content, "Hello.")
+        self.assertEqual(result.messages[-1], AIMessage(content="Hello."))
+        self.assertEqual(result.stop_reason, "stop")
+        self.assertEqual(len(provider.stream_calls), 1)
+
+    async def test_stream_returns_provider_text_without_a_callback(self) -> None:
+        provider = StreamingProvider(
+            (LLMResponse(content="No callback.", finish_reason="stop"),),
+            (("No", " callback."),),
+        )
+
+        result = await AgentRunner().run_stream(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Respond."),),
+                provider=provider,
+                tool_registry=ToolRegistry(),
+            )
+        )
+
+        self.assertEqual(result.content, "No callback.")
+        self.assertEqual(result.messages[-1], AIMessage(content="No callback."))
+
+    async def test_stream_reuses_the_existing_tool_execution_loop(self) -> None:
+        request = tool_call("call-1", "record", value="Beijing")
+        provider = StreamingProvider(
+            (
+                LLMResponse(tool_calls=(request,)),
+                LLMResponse(content="Recorded.", finish_reason="stop"),
+            ),
+            ((), ("Recorded.",)),
+        )
+        tool = RecordingTool()
+
+        result = await AgentRunner().run_stream(
+            AgentRunSpec(
+                messages=(HumanMessage(content="Record Beijing."),),
+                provider=provider,
+                tool_registry=ToolRegistry((tool,)),
+            )
+        )
+
+        self.assertEqual(result.content, "Recorded.")
+        self.assertEqual(result.tools_used, (request,))
+        self.assertEqual(tool.calls, [{"value": "Beijing"}])
+        self.assertEqual(len(provider.stream_calls), 2)
+        self.assertEqual(
+            provider.stream_calls[1][0][-1],
+            ToolMessage(content="recorded: Beijing", tool_call_id="call-1"),
+        )
 
     async def test_executes_a_tool_and_returns_the_follow_up_response(self) -> None:
         request = tool_call("call-1", "record", value="Beijing")

@@ -90,6 +90,9 @@ class ConfigLoaderTest(unittest.TestCase):
     def test_loads_optional_qq_credentials_from_dotenv(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = _write_file_config(Path(directory))
+            file_config = json.loads(config_path.read_text(encoding="utf-8"))
+            file_config["channel"] = {"qq": {"streaming": True}}
+            config_path.write_text(json.dumps(file_config), encoding="utf-8")
             env_path = Path(directory) / ".env"
             env_path.write_text(
                 "\n".join(
@@ -108,6 +111,7 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertIsNotNone(config.qq)
         self.assertEqual(config.qq.app_id if config.qq else None, "test-app-id")
         self.assertEqual(config.qq.allow_from if config.qq else None, ["user-1", "user-2"])
+        self.assertTrue(config.qq.streaming if config.qq else False)
 
     def test_rejects_incomplete_qq_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

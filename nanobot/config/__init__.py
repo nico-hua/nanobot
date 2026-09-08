@@ -22,6 +22,7 @@ from .schema import (
     ProviderConfig,
     ProviderSettingsConfig,
     QQChannelConfig,
+    QQChannelSettingsConfig,
     WebSocketChannelConfig,
 )
 
@@ -42,6 +43,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderSettingsConfig",
     "QQChannelConfig",
+    "QQChannelSettingsConfig",
     "WebSocketChannelConfig",
     "get_env_value",
     "load_file_config",

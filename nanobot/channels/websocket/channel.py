@@ -125,7 +125,7 @@ class WebSocketChannel(BaseChannel):
                     logger.info("WebSocket channel stopped")
 
     async def send(self, message: OutboundMessage) -> None:
-        """Send a final Agent response to the connection for its session."""
+        """Send an Agent event to the connection for its session."""
 
         self._validate_outbound_message(message)
         if not self.started:
@@ -139,22 +139,42 @@ class WebSocketChannel(BaseChannel):
             return
 
         try:
-            await self._send_event(
-                connection,
-                {
-                    "type": "message",
-                    "chat_id": message.chat_id,
-                    "session_id": message.session_id,
-                    "content": message.content,
-                },
-            )
-            await self._send_event(
-                connection,
-                {
-                    "type": "turn_end",
-                    "session_id": message.session_id,
-                },
-            )
+            event = message.metadata.get("event")
+            if event == "delta":
+                await self._send_event(
+                    connection,
+                    {
+                        "type": "delta",
+                        "chat_id": message.chat_id,
+                        "session_id": message.session_id,
+                        "content": message.content,
+                    },
+                )
+                return
+            if event == "turn_end":
+                await self._send_event(
+                    connection,
+                    {
+                        "type": "turn_end",
+                        "chat_id": message.chat_id,
+                        "session_id": message.session_id,
+                        "content": message.content,
+                        "metadata": dict(message.metadata),
+                    },
+                )
+                return
+            if event is None or event == "message":
+                await self._send_event(
+                    connection,
+                    {
+                        "type": "message",
+                        "chat_id": message.chat_id,
+                        "session_id": message.session_id,
+                        "content": message.content,
+                    },
+                )
+                return
+            raise ValueError(f"Unsupported WebSocket outbound event: {event}")
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -258,6 +278,7 @@ class WebSocketChannel(BaseChannel):
                 chat_id.strip(),
                 _WEBSOCKET_SENDER,
                 session_id,
+                metadata={"streaming": self.config.streaming},
             )
         except asyncio.CancelledError:
             raise
@@ -343,7 +364,7 @@ class WebSocketChannel(BaseChannel):
     async def _send_event(
         self,
         connection: web.WebSocketResponse,
-        event: dict[str, str],
+        event: dict[str, Any],
     ) -> None:
         await connection.send_json(
             event,

@@ -177,6 +177,7 @@ class QQChannel(BaseChannel):
             metadata={
                 "message_id": message_id,
                 "qq_chat_type": chat_type,
+                "streaming": self.config.streaming,
             },
         )
         self._chat_contexts[_context_key(message)] = _QQChatContext(

@@ -8,6 +8,7 @@ from nanobot.config import (
     ApiConfig,
     MCPServerConfig,
     QQChannelConfig,
+    QQChannelSettingsConfig,
     WebSocketChannelConfig,
 )
 from nanobot.config.schema import NanobotConfig, NanobotFileConfig, ProviderConfig
@@ -61,7 +62,11 @@ class QQChannelConfigTest(unittest.TestCase):
         config = QQChannelConfig(app_id="app", secret="secret")
 
         self.assertEqual(config.allow_from, ["*"])
+        self.assertFalse(config.streaming)
         self.assertTrue(config.allows_sender("user-1"))
+
+    def test_non_sensitive_qq_settings_default_to_non_streaming(self) -> None:
+        self.assertFalse(QQChannelSettingsConfig().streaming)
 
     def test_filters_senders_and_rejects_invalid_values(self) -> None:
         config = QQChannelConfig(
@@ -127,6 +132,7 @@ class WebSocketChannelConfigTest(unittest.TestCase):
 
         self.assertEqual(config.host, "127.0.0.1")
         self.assertEqual(config.port, 8765)
+        self.assertTrue(config.streaming)
 
     def test_rejects_invalid_listener_settings(self) -> None:
         for values in (
@@ -212,6 +218,7 @@ class NanobotFileConfigTest(unittest.TestCase):
             },
             channel={
                 "default": "websocket",
+                "qq": {"streaming": True},
                 "websocket": {"port": 8101},
             },
             mcp={"servers": {"local": {"command": "python"}}},
@@ -220,5 +227,6 @@ class NanobotFileConfigTest(unittest.TestCase):
         self.assertEqual(config.agent.context_window_tokens, 512)
         self.assertEqual(config.cron.timezone, "UTC")
         self.assertEqual(config.channel.default, "websocket")
+        self.assertTrue(config.channel.qq.streaming)
         self.assertEqual(config.channel.websocket.port, 8101)
         self.assertIn("local", config.mcp.servers)

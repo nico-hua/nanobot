@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
+from typing import Any
 
 from ..bus import InboundMessage, MessageBus, OutboundMessage
 
@@ -53,6 +55,8 @@ class BaseChannel(ABC):
         chat_id: str,
         sender_id: str,
         session_id: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
     ) -> InboundMessage:
         """Convert external input to an inbound message and publish it."""
 
@@ -62,6 +66,7 @@ class BaseChannel(ABC):
             sender_id=sender_id,
             session_id=session_id,
             content=content,
+            metadata=metadata or {},
         )
         await self._message_bus.publish_inbound(message)
         return message

@@ -89,6 +89,14 @@ class ProviderConfig(ProviderSettingsConfig):
         return value
 
 
+class QQChannelSettingsConfig(BaseModel):
+    """Non-sensitive QQ behavior settings stored in ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    streaming: bool = False
+
+
 class QQChannelConfig(BaseModel):
     """Credentials and sender allow-list for one QQ channel."""
 
@@ -98,6 +106,7 @@ class QQChannelConfig(BaseModel):
     secret: str
     enabled: bool = True
     allow_from: list[str] = Field(default_factory=lambda: ["*"])
+    streaming: bool = False
 
     @field_validator("app_id", "secret")
     @classmethod
@@ -128,6 +137,7 @@ class WebSocketChannelConfig(BaseModel):
 
     host: str = "127.0.0.1"
     port: int = Field(default=8765, ge=0, le=65535)
+    streaming: bool = True
 
     @field_validator("host")
     @classmethod
@@ -174,6 +184,7 @@ class ChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     default: str = "qq"
+    qq: QQChannelSettingsConfig = Field(default_factory=QQChannelSettingsConfig)
     websocket: WebSocketChannelConfig = Field(default_factory=WebSocketChannelConfig)
 
     @field_validator("default")

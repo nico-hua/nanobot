@@ -89,6 +89,12 @@
 - [x] 重组 `.nanobot/nanobot.json`：共享 workspace 保持顶层；上下文与压缩预算归入 `agent`，时区归入 `cron`，默认 Channel 与 WebSocket 设置归入 `channel`，MCP Server 列表归入 `mcp.servers`。解析后的 `NanobotConfig` 保留既有运行时字段，避免影响 Application 组装代码。
 - [x] 为 HTTP 路由、WebSocket Channel、请求到 AgentLoop 的转换、同/不同 session 行为、异常映射以及 Application API 生命周期增加 fake-based 测试；关闭期间发生取消时仍完成后续资源清理。最新完整离线测试：`404 passed, 7 skipped`。
 
+### 2026-09-08
+
+- [x] 实现按 Channel 配置启用的文本流式调用：`channel.qq.streaming` 默认 `false`，`channel.websocket.streaming` 默认 `true`；Channel 将设置写入 `InboundMessage.metadata`，AgentLoop 据此选择 `AgentRunner.run()` 或 `run_stream()`。
+- [x] WebSocket 流式协议通过 MessageBus 按顺序发送 `delta` 事件；完整结果保存后发送一个 `turn_end`，携带最终文本、`tools_used`、`token_usage` 和 `stop_reason`。普通 `message` 不再自动附带 `turn_end`。
+- [x] 最新完整离线测试：`411 passed, 7 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具
@@ -106,7 +112,7 @@
 - [ ] `message`：主动发送一般消息。
 - [ ] 其他真实 Channel，以及媒体、文件和流式消息支持。
 - [ ] HTTP API 的认证、流式响应、异步任务查询和完整 OpenAI 兼容协议。
-- [ ] WebSocket Channel 的认证、流式 delta、多会话订阅、广播、重连恢复和媒体支持。
+- [ ] WebSocket Channel 的认证、多会话订阅、广播、重连恢复和媒体支持。
 
 ### 高级能力
 
@@ -120,7 +126,7 @@
 ## 待优化项
 
 - `ToolParameter` 目前只支持 string、integer、number、boolean；数组、嵌套对象、枚举、默认值和完整 JSON Schema 校验尚未具备。
-- `AgentRunner` 仍是最小非流式、顺序工具循环；缺少并行工具调度、retry、fallback、上下文注入与统一流式工具调用增量事件。
+- `AgentRunner` 已支持文本流式与顺序工具循环；仍缺并行工具调度、retry、fallback、上下文注入与统一的工具调用/reasoning 流式事件。
 - Provider 的超时、重试、代理、模型能力声明、可选 SDK 依赖和成本控制仍需统一。
 - Session JSONL 尚无跨进程锁、损坏恢复、迁移、TTL 或缓存淘汰；摘要、记忆仍缺少多级压缩、自动重试、冲突解决和后台任务恢复。
 - Cron 缺少 cron 表达式、编辑/启停、限长批处理、事件归档、可靠投递、重试及分布式调度。
