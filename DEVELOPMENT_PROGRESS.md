@@ -94,8 +94,9 @@
 - [x] 实现按 Channel 配置启用的文本流式调用：`channel.qq.streaming` 默认 `false`，`channel.websocket.streaming` 默认 `true`；Channel 将设置写入 `InboundMessage.metadata`，AgentLoop 据此选择 `AgentRunner.run()` 或 `run_stream()`。
 - [x] WebSocket 流式协议通过 MessageBus 按顺序发送 `delta` 事件；完整结果保存后发送一个 `turn_end`，携带最终文本、`tools_used`、`token_usage` 和 `stop_reason`。普通 `message` 不再自动附带 `turn_end`。
 - [x] 新增独立的 `webui/` React + TypeScript + Vite 项目，通过根目录 `.env` 中的 `VITE_NANOBOT_WEBSOCKET_URL` 连接既有 WebSocket Channel。页面提供连接状态、基础聊天输入、发送状态和错误提示；使用现有 `message`、`delta`、`turn_end` 协议，不修改 Python 后端。
-- [x] Web UI 将 WebSocket 状态和协议处理封装为独立 Hook 与纯状态辅助函数；固定浏览器 session 内可按顺序累积 delta，并以 `turn_end` 收束最终文本，避免重复展示。当前未实现历史加载、自动重连、认证、多会话与流式工具事件。
-- [x] 最新完整离线测试：`411 passed, 7 skipped`。
+- [x] Web UI 将 WebSocket 状态和协议处理封装为独立 Hook 与纯状态辅助函数；当前会话内可按顺序累积 delta，并以 `turn_end` 收束最终文本，避免重复展示。
+- [x] 为 Web UI 增加会话列表与切换：`HttpApiService` 提供只读 `GET /v1/sessions` 和 `GET /v1/sessions/{session_id}`，经共享 `SessionManager` 读取持久化历史，并仅返回 user/assistant 可见消息。前端通过 `VITE_NANOBOT_API_URL` 加载列表和历史；新会话使用浏览器生成的唯一 session ID，首次发送后才持久化。单一 WebSocket 连接可在发送新会话消息时重新绑定，前端会忽略已切走会话的迟到流式事件。
+- [x] 最新完整离线测试：`415 passed, 7 skipped`。
 
 ## 待开发功能
 

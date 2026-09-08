@@ -1,14 +1,28 @@
 # Nanobot Web UI
 
 This directory is an independent React + TypeScript + Vite frontend for the
-Nanobot project. It connects to the existing WebSocket Channel and renders
-normal and streaming assistant responses.
+Nanobot project. It connects to the existing WebSocket Channel for normal and
+streaming assistant responses, and uses the local HTTP API to list and load
+persisted sessions.
 
 ## Configuration
 
-The frontend reads `VITE_NANOBOT_WEBSOCKET_URL` from the repository-root
-`.env` file. Its value must match the host, port, and `/ws` path configured in
-`.nanobot/nanobot.json`.
+The frontend reads the following browser-visible values from the repository-root
+`.env` file:
+
+- `VITE_NANOBOT_WEBSOCKET_URL` must match the host, port, and `/ws` path
+  configured in `channel.websocket` in `.nanobot/nanobot.json`.
+- `VITE_NANOBOT_API_URL` must match the local `api.host` and `api.port` in
+  `.nanobot/nanobot.json`. It is used only to list saved sessions and load a
+  selected transcript.
+
+## Sessions
+
+The left sidebar displays persisted sessions returned by `GET /v1/sessions`.
+Selecting one loads its user/assistant transcript through
+`GET /v1/sessions/{session_id}` and uses that ID for subsequent WebSocket
+messages. **New session** creates a browser-side unique ID and clears only the
+current UI; it is persisted by Nanobot after the first message is sent.
 
 ## Prerequisites
 
@@ -43,9 +57,10 @@ This performs strict TypeScript checking and creates `dist/`.
 npm test
 ```
 
-This runs Node's built-in test runner against the WebSocket protocol state,
+This runs Node's built-in test runner against WebSocket and session UI state,
 covering connection status, client message shape, delta accumulation, turn
-completion, and server errors. No browser-test dependency is required.
+completion, session API parsing, session switching, and error handling. No
+browser-test dependency is required.
 
 If npm reports an internal npm `edgesOut` error after dependencies change,
 remove the generated install state and install again:

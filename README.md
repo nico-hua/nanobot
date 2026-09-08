@@ -9,8 +9,8 @@
 - 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
 - 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus。
-- QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信。
-- 基于 `aiohttp` 的最小本地 HTTP API：`GET /health` 和 `POST /v1/messages`。请求经 `AgentLoop` 处理并同步返回结果，保留 Session、命令、目标模式和工具调用行为。
+- QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话。
+- 基于 `aiohttp` 的最小本地 HTTP API：`GET /health`、`POST /v1/messages`、`GET /v1/sessions` 与 `GET /v1/sessions/{session_id}`。写请求经 `AgentLoop` 处理并同步返回结果；只读会话接口经 `SessionManager` 返回可见历史，保留 Session、命令、目标模式和工具调用边界。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。当前 turn 仅在 `AgentRunner` 成功返回完整结果后原子保存，失败或取消不会留下半截历史。
 - Session 级持续目标：`GoalState` 独立持久化；`/goal <objective>` 或普通模式下的 `create_goal` 工具保存目标后，都会在同一 session 中投递一次基于当前上下文的目标 turn。`create_goal` 仅负责创建与调度确认，实际目标执行由后续内部消息完成；目标模式中的 `update_goal` 可更新或停止当前目标。目标达到 `max_iterations` 时，会先持久化完整工具批次，再通过内部 continuation 继续执行，并受每个目标的续跑上限约束；中间结果不会发送给用户。目标仅在返回非空文本时标记为 `completed`，空结果和执行异常标记为 `failed`；运行期间的普通用户输入按 session 合并并在工具调用安全点注入当前 Runner，不会并发启动第二个 Runner；`/goal status` 可查询状态，`/goal stop` 会取消 active goal 及其正在执行的目标 turn，进行中的目标会阻止 `/new` 重置会话。
 - 长期记忆：`MEMORY.md` 读取、LLM 整理，以及由 `history.jsonl` 和 `.memory_cursor` 驱动的可恢复后台事件队列。每个成功持久化的 Agent turn 都会进入该队列。
@@ -28,11 +28,11 @@ HTTP API ----------------------------^             |
                                     +-> MemoryStore -> workspace/memory
 ```
 
-HTTP API 为了返回当前请求的响应，会直接调用 `AgentLoop.process_inbound()`，而不是把原始 HTTP 请求再次发布到 `MessageBus`；两种入口仍共享同一套 Agent 执行路径。`Application` 只负责组装组件与生命周期；Provider、工具、Channel 和 Agent 执行循环保持独立职责。
+HTTP API 的 `POST /v1/messages` 为了返回当前请求的响应，会直接调用 `AgentLoop.process_inbound()`，而不是把原始 HTTP 请求再次发布到 `MessageBus`；两种入口仍共享同一套 Agent 执行路径。会话列表和历史读取接口只使用共享 `SessionManager`，不会调用 Provider 或修改会话。`Application` 只负责组装组件与生命周期；Provider、工具、Channel 和 Agent 执行循环保持独立职责。
 
 ## 配置
 
-- `.env` 主要保存敏感配置，例如 `NANOBOT_API_KEY` 和 QQ 凭据；可从 `.env.example` 开始填写。`VITE_NANOBOT_WEBSOCKET_URL` 是 Web UI 需要读取的浏览器可见地址，不应填写密钥，并需与 `channel.websocket` 的 host、port 和 `/ws` 路径保持一致。
+- `.env` 主要保存敏感配置，例如 `NANOBOT_API_KEY` 和 QQ 凭据；可从 `.env.example` 开始填写。`VITE_NANOBOT_WEBSOCKET_URL` 和 `VITE_NANOBOT_API_URL` 是 Web UI 需要读取的浏览器可见地址，不应填写密钥，分别需与 `channel.websocket` 和 `api` 的 host、port 保持一致。
 - `.nanobot/nanobot.json` 保存非敏感运行配置。`workspace` 是共享根目录；`agent` 包含上下文与压缩预算，`cron` 包含时区，`channel` 包含默认 Channel、QQ/WebSocket 设置及其 `streaming` 开关，`mcp.servers` 保存 MCP Server 列表；Provider、日志和本地 HTTP API 分别位于 `provider`、`logging` 与 `api` 区块。
 - workspace 是 Agent 可操作与存储运行时数据的范围。Session、长期记忆和记忆事件默认写入 workspace，项目的 `/.nanobot/workspace/` 已被 Git 忽略。
 
@@ -80,7 +80,7 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
   -Body '{"session_id":"example-session","content":"你好"}'
 ```
 
-`POST /v1/messages` 返回 `session_id` 和最终 `content`。`session_id` 会作为稳定的会话标识；请求超时、输入校验和 Agent 处理失败会返回对应的 JSON HTTP 错误。
+`POST /v1/messages` 返回 `session_id` 和最终 `content`。`session_id` 会作为稳定的会话标识；请求超时、输入校验和 Agent 处理失败会返回对应的 JSON HTTP 错误。`GET /v1/sessions` 返回按最近更新时间排序的 session 摘要；`GET /v1/sessions/{session_id}` 返回该 session 的 user/assistant 可见历史，不暴露 system prompt 或工具内部消息。
 
 当 `channel.default` 为 `websocket` 时，可连接 `ws://127.0.0.1:8765/ws`。连接成功会收到 `ready` 事件；客户端可发送：
 
@@ -92,7 +92,7 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
 
 ## Web UI
 
-`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 建立一个固定的浏览器 session，发送现有 `message` 协议，并在 `delta` 与 `turn_end` 事件间累积展示流式回复。当前只提供最小聊天闭环，不包含历史加载、认证、自动重连或多会话管理。
+`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `delta` 与 `turn_end` 事件间累积展示流式回复；通过本地只读 HTTP API 显示持久化会话列表和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
 
 ```powershell
 cd webui
@@ -128,7 +128,7 @@ npm run build
 - 真实 tokenizer、上下文摘要的多级策略和长期记忆冲突解决。
 - 多进程/分布式锁、记忆事件归档与可靠任务恢复。
 - 除 QQ 和 WebSocket 外的真实 Channel、消息可靠投递与总线持久化。
-- HTTP API 的认证、流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket/Web UI 的认证、多会话订阅、广播、历史加载与重连恢复。
+- HTTP API 的认证、流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket/Web UI 的认证、多会话订阅、广播、会话重命名/删除/搜索与重连恢复。
 - 完整 JSON Schema 校验、工具插件生态及更复杂的安全沙箱。
 - Skill 的自动选择、安装/更新、脚本执行、权限控制与插件来源。
 

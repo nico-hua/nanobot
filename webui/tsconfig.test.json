@@ -14,6 +14,7 @@
   "include": [
     "src/components/MessageContent.tsx",
     "src/conversationScroll.ts",
-    "src/hooks/chatState.ts"
+    "src/hooks/chatState.ts",
+    "src/api/sessions.ts"
   ]
 }

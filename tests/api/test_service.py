@@ -14,8 +14,16 @@ from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.api import HttpApiService
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.config import ApiConfig
-from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
-from nanobot.session import SessionManager
+from nanobot.providers import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    LLMProvider,
+    LLMResponse,
+    SystemMessage,
+    ToolMessage,
+)
+from nanobot.session import Session, SessionManager
 from nanobot.tools import Tool, ToolRegistry
 
 
@@ -295,6 +303,80 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload, {"status": "ok"})
 
+    async def test_session_list_and_history_expose_only_chat_messages(self) -> None:
+        sessions = SessionManager(Path(self._temporary_directory.name) / "workspace")
+        sessions.save(
+            Session.create("session-one").with_messages(
+                (
+                    SystemMessage(content="Internal prompt"),
+                    HumanMessage(content="First user message"),
+                    AIMessage(content="First assistant reply"),
+                    ToolMessage(content="Tool output", tool_call_id="call-1"),
+                )
+            )
+        )
+        sessions.save(
+            Session.create("session-two").with_messages(
+                (HumanMessage(content="Second session"),)
+            )
+        )
+        service = await self._start_service(RecordingLoop(), sessions)
+
+        status, payload = await _http_request(service, "GET", "/v1/sessions")
+
+        self.assertEqual(status, 200)
+        summaries = payload["sessions"]
+        self.assertIsInstance(summaries, list)
+        summary = next(item for item in summaries if item["session_id"] == "session-one")
+        self.assertEqual(summary["message_count"], 2)
+        self.assertEqual(summary["preview"], "First assistant reply")
+        self.assertIn("updated_at", summary)
+
+        status, history = await _http_request(
+            service,
+            "GET",
+            "/v1/sessions/session-one",
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(history["session_id"], "session-one")
+        self.assertEqual(
+            history["messages"],
+            [
+                {"role": "user", "content": "First user message"},
+                {"role": "assistant", "content": "First assistant reply"},
+            ],
+        )
+
+    async def test_missing_session_history_returns_a_clear_error(self) -> None:
+        service = await self._start_service(RecordingLoop())
+
+        status, payload = await _http_request(
+            service,
+            "GET",
+            "/v1/sessions/missing-session",
+        )
+
+        self.assertEqual(status, 404)
+        self.assertEqual(payload["error"]["code"], "session_not_found")
+
+    async def test_local_browser_origin_can_read_session_data(self) -> None:
+        service = await self._start_service(RecordingLoop())
+        port = service.port
+        if port is None:
+            raise AssertionError("HTTP API service has no bound port")
+
+        async with ClientSession() as client:
+            async with client.get(
+                f"http://127.0.0.1:{port}/v1/sessions",
+                headers={"Origin": "http://localhost:5173"},
+            ) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(
+                    response.headers["Access-Control-Allow-Origin"],
+                    "http://localhost:5173",
+                )
+
     async def test_router_returns_a_json_error_for_an_unsupported_method(self) -> None:
         service = await self._start_service(RecordingLoop())
 
@@ -303,9 +385,15 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 405)
         self.assertEqual(payload["error"]["code"], "method_not_allowed")
 
-    async def _start_service(self, loop: AgentLoop | RecordingLoop) -> HttpApiService:
+    async def _start_service(
+        self,
+        loop: AgentLoop | RecordingLoop,
+        sessions: SessionManager | None = None,
+    ) -> HttpApiService:
         service = HttpApiService(
             loop,
+            sessions
+            or SessionManager(Path(self._temporary_directory.name) / "api-workspace"),
             ApiConfig(
                 enabled=True,
                 host="127.0.0.1",

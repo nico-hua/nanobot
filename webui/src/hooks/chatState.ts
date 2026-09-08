@@ -11,6 +11,8 @@ export type ChatMessage = {
   isStreaming: boolean;
 };
 
+export type PersistedChatMessage = Pick<ChatMessage, "role" | "content">;
+
 export type ServerEvent = Record<string, unknown> & { type: string };
 
 export type ChatState = {
@@ -23,6 +25,7 @@ export type ChatState = {
 };
 
 const INVALID_EVENT_ERROR = "Received an invalid message from Nanobot.";
+const SESSION_EVENT_TYPES = new Set(["delta", "message", "turn_end"]);
 
 export function createInitialChatState(): ChatState {
   return {
@@ -46,6 +49,35 @@ export function createClientMessage(
     session_id: sessionId,
     content,
   };
+}
+
+/** Replace only the visible transcript when the user selects another session. */
+export function replaceChatHistory(
+  state: ChatState,
+  messages: readonly PersistedChatMessage[],
+): ChatState {
+  const visibleMessages = messages.map((message, index) => ({
+    id: `${message.role}-${index + 1}`,
+    role: message.role,
+    content: message.content,
+    isStreaming: false,
+  }));
+  return {
+    ...state,
+    error: null,
+    isSending: false,
+    messages: visibleMessages,
+    activeAssistantId: null,
+    nextMessageSequence: visibleMessages.length,
+  };
+}
+
+/** Ignore late stream events belonging to a session that is no longer active. */
+export function isEventForSession(event: ServerEvent, sessionId: string): boolean {
+  if (!SESSION_EVENT_TYPES.has(event.type)) {
+    return true;
+  }
+  return event.session_id === sessionId;
 }
 
 export function beginConnection(state: ChatState): ChatState {

@@ -6,10 +6,13 @@ import {
   beginUserMessage,
   createClientMessage,
   createInitialChatState,
+  isEventForSession,
   markConnected,
   markConnectionError,
   markDisconnected,
   markServerError,
+  replaceChatHistory,
+  type PersistedChatMessage,
   type ServerEvent,
 } from "./chatState";
 
@@ -41,6 +44,8 @@ export function useNanobotWebSocket({
 }: UseNanobotWebSocketOptions) {
   const [state, setState] = useState(createInitialChatState);
   const socketRef = useRef<WebSocket | null>(null);
+  const activeSessionRef = useRef(sessionId);
+  activeSessionRef.current = sessionId;
 
   useEffect(() => {
     if (!url) {
@@ -78,6 +83,9 @@ export function useNanobotWebSocket({
       }
       try {
         const event: unknown = JSON.parse(messageEvent.data);
+        if (isServerEvent(event) && !isEventForSession(event, activeSessionRef.current)) {
+          return;
+        }
         setState((currentState) =>
           isServerEvent(event)
             ? applyServerEvent(currentState, event)
@@ -147,11 +155,19 @@ export function useNanobotWebSocket({
     [chatId, sessionId],
   );
 
+  const replaceMessages = useCallback(
+    (messages: readonly PersistedChatMessage[]) => {
+      setState((currentState) => replaceChatHistory(currentState, messages));
+    },
+    [],
+  );
+
   return {
     connectionStatus: state.connectionStatus,
     error: state.error,
     isSending: state.isSending,
     messages: state.messages,
     sendMessage,
+    replaceMessages,
   };
 }

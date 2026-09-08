@@ -6,12 +6,15 @@ import asyncio
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 from aiohttp import web
 
 from ..agent import AgentLoop
 from ..bus import InboundMessage, OutboundMessage
 from ..config import ApiConfig
+from ..providers import BaseMessage
+from ..session import Session, SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -29,18 +32,28 @@ class HttpApiService:
     the existing AgentLoop path.
     """
 
-    def __init__(self, agent_loop: AgentLoop, config: ApiConfig) -> None:
+    def __init__(
+        self,
+        agent_loop: AgentLoop,
+        session_manager: SessionManager,
+        config: ApiConfig,
+    ) -> None:
         if not isinstance(config, ApiConfig):
             raise TypeError("HttpApiService requires an ApiConfig")
+        if not isinstance(session_manager, SessionManager):
+            raise TypeError("HttpApiService requires a SessionManager")
 
         self._agent_loop = agent_loop
+        self._session_manager = session_manager
         self._config = config
         self._app = web.Application(
             client_max_size=_MAX_REQUEST_BODY_BYTES,
-            middlewares=(_error_middleware,),
+            middlewares=(_cors_middleware, _error_middleware),
         )
         self._app.router.add_get("/health", self._health)
         self._app.router.add_post("/v1/messages", self._post_message)
+        self._app.router.add_get("/v1/sessions", self._list_sessions)
+        self._app.router.add_get("/v1/sessions/{session_id}", self._get_session)
         self._runner: web.AppRunner | None = None
         self._started = False
 
@@ -159,6 +172,38 @@ class HttpApiService:
         )
         return await self._process_inbound(inbound)
 
+    async def _list_sessions(self, request: web.Request) -> web.Response:
+        """Return persisted sessions ordered by their most recent update."""
+
+        del request
+        sessions = sorted(
+            self._session_manager.list_sessions(),
+            key=lambda session: (session.updated_at, session.key),
+            reverse=True,
+        )
+        return _json_response(
+            {"sessions": [_session_summary(session) for session in sessions]}
+        )
+
+    async def _get_session(self, request: web.Request) -> web.Response:
+        """Return the UI-visible history for one saved session."""
+
+        session_id = request.match_info["session_id"]
+        session = self._session_manager.get(session_id)
+        if session is None:
+            return _error_response(
+                404,
+                "session_not_found",
+                "Session was not found",
+            )
+        return _json_response(
+            {
+                "session_id": session.key,
+                "updated_at": session.updated_at.isoformat(),
+                "messages": _visible_message_records(session.messages),
+            }
+        )
+
     async def _process_inbound(self, inbound: InboundMessage) -> web.Response:
         process_inbound = getattr(self._agent_loop, "process_inbound", None)
         if not callable(process_inbound):
@@ -221,6 +266,21 @@ class HttpApiService:
 
 
 @web.middleware
+async def _cors_middleware(
+    request: web.Request,
+    handler: Any,
+) -> web.StreamResponse:
+    """Allow the local Web UI to read the local-only API responses."""
+
+    response = await handler(request)
+    origin = request.headers.get("Origin")
+    if _is_local_browser_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+@web.middleware
 async def _error_middleware(
     request: web.Request,
     handler: Any,
@@ -260,3 +320,44 @@ def _framework_error_details(status: int) -> tuple[str, str]:
         405: ("method_not_allowed", "Method not allowed"),
         413: ("payload_too_large", "Request body is too large"),
     }.get(status, ("request_error", "Request could not be processed"))
+
+
+def _session_summary(session: Session) -> dict[str, Any]:
+    messages = _visible_message_records(session.messages)
+    return {
+        "session_id": session.key,
+        "updated_at": session.updated_at.isoformat(),
+        "message_count": len(messages),
+        "preview": _preview(messages),
+    }
+
+
+def _visible_message_records(
+    messages: tuple[BaseMessage, ...],
+) -> list[dict[str, str]]:
+    """Keep the chat transcript separate from tool and system internals."""
+
+    return [
+        {"role": message.role, "content": message.content}
+        for message in messages
+        if message.role in {"user", "assistant"}
+    ]
+
+
+def _preview(messages: list[dict[str, str]], *, limit: int = 120) -> str:
+    for message in reversed(messages):
+        content = " ".join(message["content"].split())
+        if content:
+            return content if len(content) <= limit else f"{content[:limit - 1]}…"
+    return ""
+
+
+def _is_local_browser_origin(origin: str | None) -> bool:
+    if not isinstance(origin, str):
+        return False
+    parsed = urlparse(origin)
+    return parsed.scheme in {"http", "https"} and parsed.hostname in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }

@@ -303,11 +303,8 @@ class WebSocketChannel(BaseChannel):
         session_id: str,
     ) -> tuple[str, str] | None:
         current_session = self._connection_sessions.get(connection)
-        if current_session is not None and current_session != session_id:
-            return (
-                "session_mismatch",
-                "A connection can use only one session",
-            )
+        if current_session == session_id:
+            return None
 
         existing_connection = self._connections_by_session.get(session_id)
         if (
@@ -320,6 +317,14 @@ class WebSocketChannel(BaseChannel):
                 "A connection is already active for this session",
             )
 
+        # A browser connection can switch its active session.  Removing the
+        # old routing entry prevents late output from appearing in the newly
+        # selected conversation.
+        if (
+            current_session is not None
+            and self._connections_by_session.get(current_session) is connection
+        ):
+            self._connections_by_session.pop(current_session, None)
         self._connection_sessions[connection] = session_id
         self._connections_by_session[session_id] = connection
         return None

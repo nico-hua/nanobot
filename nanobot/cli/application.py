@@ -44,7 +44,7 @@ AgentLoopFactory = Callable[
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
 CronServiceFactory = Callable[[CronCallback, Path], CronService]
-ApiServiceFactory = Callable[[AgentLoop, ApiConfig], HttpApiService]
+ApiServiceFactory = Callable[[AgentLoop, SessionManager, ApiConfig], HttpApiService]
 
 
 class Application:
@@ -134,7 +134,11 @@ class Application:
             self._message_bus,
             self._subagent_manager,
         )
-        self._api_service = api_service_factory(self._agent_loop, config.api)
+        self._api_service = api_service_factory(
+            self._agent_loop,
+            self._session_manager,
+            config.api,
+        )
         channel = channel_factory(config.default_channel, self._message_bus, config)
         self._channel_manager = channel_manager_factory(self._message_bus, (channel,))
         self._agent_task: asyncio.Task[None] | None = None

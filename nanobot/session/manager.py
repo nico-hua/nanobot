@@ -29,6 +29,12 @@ class SessionManager:
         _validate_session_key(session_key)
         return self._storage.load(session_key) or Session.create(session_key)
 
+    def get(self, session_key: str) -> Session | None:
+        """Load a saved session without creating or persisting a new one."""
+
+        _validate_session_key(session_key)
+        return self._storage.load(session_key)
+
     def save(self, session: Session) -> Session:
         """Persist one complete session and return its timestamped version."""
 

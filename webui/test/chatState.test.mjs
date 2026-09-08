@@ -9,10 +9,18 @@ import {
   beginUserMessage,
   createClientMessage,
   createInitialChatState,
+  isEventForSession,
   markConnected,
   markConnectionError,
   markDisconnected,
+  replaceChatHistory,
 } from "../.test-build/hooks/chatState.js";
+import {
+  createSessionId,
+  fetchSessionHistory,
+  fetchSessionSummaries,
+  SessionApiError,
+} from "../.test-build/api/sessions.js";
 import { MessageContent } from "../.test-build/components/MessageContent.js";
 import { isNearConversationBottom } from "../.test-build/conversationScroll.js";
 
@@ -39,6 +47,135 @@ test("the client message uses the existing backend WebSocket protocol", () => {
     session_id: "session-1",
     content: "Hello",
   });
+});
+
+test("saved-session history replaces visible chat state without mixing sessions", () => {
+  let state = beginUserMessage(createInitialChatState(), "Old session message");
+  state = applyServerEvent(state, { type: "message", content: "Old reply" });
+
+  state = replaceChatHistory(state, [
+    { role: "user", content: "New session message" },
+    { role: "assistant", content: "New session reply" },
+  ]);
+
+  assert.deepEqual(
+    state.messages.map(({ role, content, isStreaming }) => ({
+      role,
+      content,
+      isStreaming,
+    })),
+    [
+      { role: "user", content: "New session message", isStreaming: false },
+      { role: "assistant", content: "New session reply", isStreaming: false },
+    ],
+  );
+  assert.equal(state.isSending, false);
+  assert.equal(state.activeAssistantId, null);
+});
+
+test("late stream events from an unselected session are ignored", () => {
+  assert.equal(
+    isEventForSession(
+      { type: "delta", session_id: "session-one", content: "Late" },
+      "session-two",
+    ),
+    false,
+  );
+  assert.equal(
+    isEventForSession(
+      { type: "turn_end", session_id: "session-two", content: "Current" },
+      "session-two",
+    ),
+    true,
+  );
+  assert.equal(isEventForSession({ type: "ready" }, "session-two"), true);
+});
+
+test("the session API loads summaries and a selected transcript", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    if (String(url).endsWith("/v1/sessions")) {
+      return new Response(
+        JSON.stringify({
+          sessions: [
+            {
+              session_id: "session-one",
+              updated_at: "2026-09-08T12:00:00+00:00",
+              message_count: 2,
+              preview: "Latest reply",
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        session_id: "session two",
+        updated_at: "2026-09-08T12:01:00+00:00",
+        messages: [
+          { role: "user", content: "Hello" },
+          { role: "assistant", content: "Hi" },
+        ],
+      }),
+      { status: 200 },
+    );
+  };
+
+  try {
+    const summaries = await fetchSessionSummaries("http://127.0.0.1:8000/");
+    const history = await fetchSessionHistory(
+      "http://127.0.0.1:8000",
+      "session two",
+    );
+
+    assert.deepEqual(summaries, [
+      {
+        sessionId: "session-one",
+        updatedAt: "2026-09-08T12:00:00+00:00",
+        messageCount: 2,
+        preview: "Latest reply",
+      },
+    ]);
+    assert.deepEqual(history.messages, [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi" },
+    ]);
+    assert.deepEqual(requests, [
+      "http://127.0.0.1:8000/v1/sessions",
+      "http://127.0.0.1:8000/v1/sessions/session%20two",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("new sessions use a unique browser-owned identifier and do not require persistence", () => {
+  assert.equal(createSessionId(() => "first"), "webui-first");
+  assert.equal(createSessionId(() => "second"), "webui-second");
+});
+
+test("session API failures retain a clear status and error message", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({ error: { message: "Session was not found" } }),
+      { status: 404 },
+    );
+
+  try {
+    await assert.rejects(
+      fetchSessionHistory("http://127.0.0.1:8000", "missing"),
+      (error) =>
+        error instanceof SessionApiError &&
+        error.status === 404 &&
+        error.message === "Session was not found",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("deltas accumulate into one assistant message and turn_end does not duplicate it", () => {
@@ -136,6 +273,9 @@ test("the viewport layout keeps scrolling inside the conversation", async () => 
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?display:\s*flex;/);
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?flex-direction:\s*column;/);
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?height:\s*100dvh;/);
+  assert.match(appStyles, /\.app-workspace\s*\{[\s\S]*?grid-template-columns:/);
+  assert.match(appStyles, /\.app-workspace\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\);/);
+  assert.match(appStyles, /\.session-list\s*\{[\s\S]*?overflow-y:\s*auto;/);
   assert.match(appStyles, /\.chat-panel\s*\{[\s\S]*?flex:\s*1 1 auto;/);
   assert.match(appStyles, /\.conversation-scroll\s*\{[\s\S]*?flex:\s*1 1 auto;/);
   assert.match(appStyles, /\.conversation-scroll\s*\{[\s\S]*?overflow-y:\s*auto;/);
