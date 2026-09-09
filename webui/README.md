@@ -5,6 +5,9 @@ Nanobot project. It connects to the existing WebSocket Channel for normal and
 streaming assistant responses, including tool-call progress, and uses the local
 HTTP API to list and load persisted sessions.
 
+For a code-oriented explanation of the current React components, state, protocol
+and data flow, see [Web UI React 代码导读](../docs/WEBUI_REACT_GUIDE.md).
+
 ## Configuration
 
 The frontend reads the following browser-visible values from the repository-root

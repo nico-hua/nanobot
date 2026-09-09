@@ -13,7 +13,7 @@ python -m nanobot [--config <path>] [--workspace <path>]
 | `--config <path>` | 指定非敏感 JSON 配置文件。默认使用项目配置加载器定义的默认路径（通常为 `.nanobot/nanobot.json`）。 |
 | `--workspace <path>` | 仅本次运行覆盖配置中的 workspace。Session、记忆、Cron 任务和 Skills 等运行时数据会使用该目录。 |
 
-敏感凭据（例如 Provider API key、QQ app secret）应保留在本地 `.env`，不要作为命令行参数传入，也不要提交到仓库。
+敏感凭据（例如 Provider API key、QQ app secret）应保留在本地 `.nanobot/nanobot.json`，不要作为命令行参数传入，也不要提交到仓库。根目录 `.env` 仅供 Web UI 读取浏览器可见的 `VITE_*` 配置。
 
 ## 聊天命令
 

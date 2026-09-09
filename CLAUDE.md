@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`nanobot` is an educational, from-scratch reimplementation of an Agent system. The goal is clarity, readability, and testability of the key Agent boundaries — not a 1:1 port of a production framework. See `AGENTS.md` for the full development principles and workflow; `DEVELOPMENT_PROGRESS.md` is a dated log of what has been built and what is intentionally left out.
+`nanobot` is an educational, from-scratch reimplementation of an Agent system. The goal is clarity, readability, and testability of the key Agent boundaries — not a 1:1 port of a production framework. See `AGENTS.md` for the full development principles and workflow; `docs/DEVELOPMENT_PROGRESS.md` is a dated log of what has been built and what is intentionally left out.
 
 ## Commands
 

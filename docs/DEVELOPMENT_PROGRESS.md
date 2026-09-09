@@ -61,7 +61,7 @@
 - [x] 完善后台 `SubagentManager` 生命周期：任务记录保留在内存中，支持 `pending`、`running`、`completed`、`failed`、`cancelled` 与 `timeout` 状态，并保存任务描述、所属 session、路由信息、创建/结束时间、错误和结果摘要。任务只会进入一次终态，成功、失败和超时结果最多通过 `MessageBus` 回传一次；取消后不会再发布成功结果。
 - [x] 为后台子任务增加默认运行时策略：最多并发 4 个任务、默认超时 300 秒；支持按任务 ID 查询、按 session 列出、按 session 取消，以及 AgentLoop 关闭时统一取消和等待已有任务。同步 `SpawnTool(wait=true)` 保持原有行为。
 - [x] `CommandRouter` 新增 `/subagents`、`/subagents status <task_id>` 和 `/subagents cancel <task_id>`。命令只处理当前 session 的内存任务，不进入 LLM、Session 普通消息或记忆事件队列；无法访问其他会话任务，终态任务不能再次取消。
-- [x] 新增 `COMMANDS.md`，集中说明应用启动参数和当前聊天渠道的斜杠命令。最近一次完整离线测试为 `346 passed, 7 skipped`。
+- [x] 新增 `docs/COMMANDS.md`，集中说明应用启动参数和当前聊天渠道的斜杠命令。最近一次完整离线测试为 `346 passed, 7 skipped`。
 - [x] 增加 Session 独立 `goal_state`：`GoalState` 持久化 active、completed、cancelled、failed 状态、目标与时间边界，不使用通用 Session metadata。`/goal <objective>` 会保存或替换终态目标；已有 active goal 时不覆盖。
 - [x] `/goal` 保存成功后向共享 `MessageBus` 发布带 `source=goal` 的内部 `InboundMessage`，使用当前 Session 上下文和可用工具启动一次普通 Agent turn。QQ 将 goal 结果作为主动消息发送，不复用旧 `message_id`。自动持续续跑仍留待后续阶段。
 - [x] 完善目标控制命令：`/goal status` 只读返回当前目标状态，`/goal stop` 将 active goal 持久化为 `cancelled`；两者均不调用 LLM。`/new` 在存在 active goal 时拒绝重置并提示先完成或停止目标，其他情况下会同时清空短期会话状态和终态目标。
@@ -102,6 +102,15 @@
 - [x] 此前聚焦验证：AgentRunner、AgentLoop 流式、WebSocket Channel 与 HTTP API 共 `39` 项测试通过；Web UI 应用和测试 TypeScript 配置通过无输出类型检查。
 - [x] 此前完整离线测试：`415 passed, 7 skipped`。
 
+### 2026-09-09
+
+- [x] 完成后端配置收敛：Provider、QQ 与运行时配置统一读取本地 `.nanobot/nanobot.json`，根目录 `.env` 仅保留浏览器可见的 `VITE_*` 变量；真实配置取消 Git 跟踪，新增可提交的 `.nanobot/nanobot.example.json`。
+- [x] 增加最小静态 token 认证：`auth.enabled` 关闭时保持兼容；开启且 token 为空时首次启动生成并原子保存 token。HTTP API 使用 Bearer 认证（`/health` 例外），WebSocket 要求连接后的首个 `authenticate` 事件成功后才转发聊天消息；错误、日志和页面不暴露 token。
+- [x] Web UI 增加认证状态与有限 WebSocket 重连。连接管理器以 0.5、1、1.5 秒递增重试，旧 socket 回调不会影响新连接；重连后重新读取当前 session 的已持久化历史，未确认的流式片段不会被误认为历史记录。
+- [x] 完善 Web UI 交互：压缩布局并加入顶栏 logo、会话侧栏、工具调用折叠展示、停止当前生成与斜杠命令提示面板。命令提示只填充输入框，实际命令仍由后端 `CommandRouter` 处理。
+- [x] 配置加载只解析、校验并创建 `channel.default` 指向的 Channel；未选中的 QQ 或 WebSocket 配置可暂时不完整，切换默认 Channel 前再补全目标配置。
+- [x] 在 `docs/` 统一维护开发进度、命令说明和面向开发者的 Web UI React 代码导读。
+
 ## 待开发功能
 
 ### 核心开发工具
@@ -118,8 +127,8 @@
 - [ ] `web_fetch`：读取网页内容。
 - [ ] `message`：主动发送一般消息。
 - [ ] 其他真实 Channel，以及媒体、文件和流式消息支持。
-- [ ] HTTP API 的认证、流式响应、异步任务查询和完整 OpenAI 兼容协议。
-- [ ] WebSocket Channel 的认证、多会话订阅、广播、重连恢复和媒体支持。
+- [ ] HTTP API 的流式响应、异步任务查询和完整 OpenAI 兼容协议。
+- [ ] WebSocket Channel 的多会话订阅、广播、流式断点续传和媒体支持。
 
 ### 高级能力
 
@@ -140,7 +149,7 @@
 - Subagent 后台任务尚无持久化、进程重启恢复、自动重试、结果在原始 tool call 中实时注入、LLM 可调用的任务管理工具或多 Agent 协作。
 - `ExecTool` 不是安全沙箱；仍需要操作系统级 sandbox 来限制文件、网络、系统调用与进程权限。
 - QQ 和 WebSocket 之外的 Channel、消息重试、可靠投递、总线持久化、优先级、结构化日志、指标、追踪和外部日志后端尚未实现。
-- HTTP API 当前仅适合受信任的本地调用：虽然默认监听 `127.0.0.1`，但尚无认证、限流、审计日志、跨进程会话协调或生产部署策略。
+- HTTP API 默认监听 `127.0.0.1`，并支持最小静态 Bearer 认证；仍缺少限流、审计日志、跨进程会话协调和生产部署策略。
 
 ## 待解决问题
 

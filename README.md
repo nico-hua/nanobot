@@ -90,11 +90,11 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
 {"type":"message","chat_id":"example-chat","content":"你好"}
 ```
 
-服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，工具实际执行前先返回包含工具 ID、名称和参数的 `tool_call`，随后按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。浏览器可在流式回复期间使用现有 `message` 协议发送 `content: "/stop"` 取消对应 session；服务会返回 `stop_reason="cancelled"` 的 `turn_end`，已收到的 delta 会保留，未完成的 turn 不会写入 Session。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
+服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，工具实际执行前先返回包含工具 ID、名称和参数的 `tool_call`，随后按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。浏览器可在流式回复期间使用现有 `message` 协议发送 `content: "/stop"` 取消对应 session；服务会返回 `stop_reason="cancelled"` 的 `turn_end`，已收到的 delta 会保留，未完成的 turn 不会写入 Session。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。启用 `auth.enabled` 后，HTTP 使用 Bearer token，WebSocket 必须先发送认证事件；Web UI 对断线提供有限次数重连，并在成功后通过历史接口恢复已持久化消息。
 
 ## Web UI
 
-`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `tool_call`、`delta` 与 `turn_end` 事件间展示工具进度和累积流式回复；流式 turn 期间可点击停止，已收到的内容会保留并在取消后恢复输入。通过本地只读 HTTP API 显示持久化会话列表、历史 assistant tool call 和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
+`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `tool_call`、`delta` 与 `turn_end` 事件间展示工具进度和累积流式回复；流式 turn 期间可点击停止，已收到的内容会保留并在取消后恢复输入。通过本地只读 HTTP API 显示持久化会话列表、历史 assistant tool call 和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。认证开启时它从 `VITE_NANOBOT_AUTH_TOKEN` 完成 HTTP Bearer 与 WebSocket 首事件认证；断线时会有限次数重连并重新加载当前会话的持久化历史，不尝试恢复未完成的 delta。当前仍不包含多会话订阅、重命名、删除或搜索。
 
 ```powershell
 cd webui
@@ -129,8 +129,14 @@ npm run build
 - 真实 tokenizer、上下文摘要的多级策略和长期记忆冲突解决。
 - 多进程/分布式锁、记忆事件归档与可靠任务恢复。
 - 除 QQ 和 WebSocket 外的真实 Channel、消息可靠投递与总线持久化。
-- HTTP API 的认证、流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket/Web UI 的认证、多会话订阅、广播、会话重命名/删除/搜索与重连恢复。
+- HTTP API 的流式响应、异步任务查询、限流与完整 OpenAI 兼容协议；WebSocket/Web UI 的多会话订阅、广播、会话重命名/删除/搜索与流式断点续传。
 - 完整 JSON Schema 校验、工具插件生态及更复杂的安全沙箱。
 - Skill 的自动选择、安装/更新、脚本执行、权限控制与插件来源。
 
-详细开发进度和已知限制见 [DEVELOPMENT_PROGRESS.md](DEVELOPMENT_PROGRESS.md)，协作与开发规范见 [AGENTS.md](AGENTS.md)。
+开发文档：
+
+- [Web UI React 代码导读](docs/WEBUI_REACT_GUIDE.md)
+- [开发进度与待办](docs/DEVELOPMENT_PROGRESS.md)
+- [命令说明](docs/COMMANDS.md)
+
+协作与开发规范见 [AGENTS.md](AGENTS.md)。
