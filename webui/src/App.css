@@ -525,8 +525,66 @@
 
 .composer {
   flex: 0 0 auto;
+  position: relative;
   min-width: 0;
   padding: 0.45rem 0.55rem;
+}
+
+.command-suggestion-panel {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  width: min(32rem, 100%);
+  max-height: min(18rem, 45dvh);
+  overflow-y: auto;
+  padding: 0.35rem;
+  border: 1px solid #cfe0d6;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  box-shadow: 0 0.75rem 2rem rgba(23, 35, 30, 0.14);
+}
+
+.command-suggestion-panel ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-suggestion-panel__item {
+  display: grid;
+  width: 100%;
+  gap: 0.1rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  color: #33463b;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.command-suggestion-panel__item:hover,
+.command-suggestion-panel__item:focus-visible {
+  border-color: #b7d4c7;
+  background: #f2f8f4;
+  outline: none;
+}
+
+.command-suggestion-panel__item code {
+  color: #0d6b5b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.command-suggestion-panel__item span {
+  color: #63736a;
+  font-size: 0.75rem;
+  line-height: 1.35;
 }
 
 .composer__controls {
@@ -561,7 +619,7 @@
   border-color: #0d6b5b;
 }
 
-.composer button {
+.composer__actions button {
   height: 2.45rem;
   min-height: 2.45rem;
   padding: 0 0.75rem;
@@ -572,13 +630,13 @@
   font-weight: 700;
 }
 
-.composer button.composer__stop {
+.composer__actions button.composer__stop {
   border: 1px solid #b4493a;
   color: #9c2f20;
   background: #fff1ee;
 }
 
-.composer button:disabled,
+.composer__actions button:disabled,
 .composer textarea:disabled {
   cursor: not-allowed;
   opacity: 0.5;

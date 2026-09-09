@@ -32,8 +32,68 @@ import {
   fetchSessionSummaries,
   SessionApiError,
 } from "../.test-build/api/sessions.js";
+import { getSlashCommandSuggestions } from "../.test-build/commands.js";
 import { MessageContent } from "../.test-build/components/MessageContent.js";
 import { isNearConversationBottom } from "../.test-build/conversationScroll.js";
+
+test("slash command suggestions list, filter, and preserve argument placeholders", () => {
+  assert.deepEqual(
+    getSlashCommandSuggestions("/").map((suggestion) => suggestion.usage),
+    [
+      "/new",
+      "/stop",
+      "/help",
+      "/goal <目标描述>",
+      "/goal status",
+      "/goal stop",
+      "/compact",
+      "/memory",
+      "/subagents",
+      "/subagents status <task_id>",
+      "/subagents cancel <task_id>",
+    ],
+  );
+  assert.deepEqual(
+    getSlashCommandSuggestions("/goal st").map(
+      (suggestion) => suggestion.usage,
+    ),
+    ["/goal status"],
+  );
+  assert.equal(getSlashCommandSuggestions("ordinary text").length, 0);
+
+  const selected = getSlashCommandSuggestions("/goal <")[0];
+  assert.equal(selected?.insertText, "/goal ");
+});
+
+test("slash command text uses the existing WebSocket message contract", () => {
+  const command = getSlashCommandSuggestions("/compact")[0];
+  assert.deepEqual(
+    createWebSocketClientMessage("chat-1", "session-1", command.insertText),
+    {
+      type: "message",
+      chat_id: "chat-1",
+      session_id: "session-1",
+      content: "/compact",
+    },
+  );
+});
+
+test("selecting a command only fills the composer instead of submitting it", async () => {
+  const [appSource, panelSource] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(
+      new URL("../src/components/CommandSuggestionPanel.tsx", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(panelSource, /type="button"/);
+  assert.match(panelSource, /onSelect\(suggestion\.insertText\)/);
+  assert.match(
+    appSource,
+    /function handleCommandSelection\(insertText: string\)\s*\{\s*setDraft\(insertText\);/,
+  );
+});
 
 test("connection state reports connecting, connected, disconnected, and errors", () => {
   let state = createInitialChatState();

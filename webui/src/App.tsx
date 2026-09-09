@@ -12,6 +12,8 @@ import {
   fetchSessionSummaries,
   SessionApiError,
 } from "./api/sessions";
+import { getSlashCommandSuggestions } from "./commands";
+import { CommandSuggestionPanel } from "./components/CommandSuggestionPanel";
 import { MessageContent } from "./components/MessageContent";
 import { isNearConversationBottom } from "./conversationScroll";
 import {
@@ -41,6 +43,7 @@ function App() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const conversationRef = useRef<HTMLDivElement>(null);
+  const draftInputRef = useRef<HTMLTextAreaElement>(null);
   const shouldFollowLatestRef = useRef(true);
   const historyRequestRef = useRef(0);
   const wasSendingRef = useRef(false);
@@ -149,6 +152,7 @@ function App() {
   );
   const isComposerDisabled =
     isSending || isLoadingHistory || connectionStatus !== "connected";
+  const commandSuggestions = getSlashCommandSuggestions(draft);
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -198,6 +202,11 @@ function App() {
     replaceMessages([]);
     setSessionError(null);
     setSessionId(createSessionId());
+  }
+
+  function handleCommandSelection(insertText: string) {
+    setDraft(insertText);
+    draftInputRef.current?.focus();
   }
 
   return (
@@ -334,11 +343,18 @@ function App() {
             aria-label="Message composer"
             onSubmit={handleSubmit}
           >
+            {commandSuggestions.length > 0 ? (
+              <CommandSuggestionPanel
+                suggestions={commandSuggestions}
+                onSelect={handleCommandSelection}
+              />
+            ) : null}
             <div className="composer__controls">
               <textarea
                 id="message"
                 name="message"
                 aria-label="Message"
+                ref={draftInputRef}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder="Ask Nanobot anything..."
