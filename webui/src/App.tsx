@@ -28,6 +28,7 @@ const API_BASE_URL =
 const STATUS_LABELS: Record<ConnectionStatus, string> = {
   connecting: "Connecting",
   connected: "Connected",
+  reconnecting: "Reconnecting",
   disconnected: "Disconnected",
   error: "Connection error",
 };
@@ -43,14 +44,19 @@ function App() {
   const shouldFollowLatestRef = useRef(true);
   const historyRequestRef = useRef(0);
   const wasSendingRef = useRef(false);
+  const lastConnectionVersionRef = useRef(0);
+  const activeSessionIdRef = useRef(sessionId);
+  activeSessionIdRef.current = sessionId;
   const {
     connectionStatus,
+    connectionVersion,
     error,
     isSending,
     isStopping,
     messages,
     sendMessage,
     stopGeneration,
+    reconnect,
     replaceMessages,
   } = useNanobotWebSocket({
     url: import.meta.env.VITE_NANOBOT_WEBSOCKET_URL,
@@ -74,12 +80,12 @@ function App() {
     void refreshSessions();
   }, [refreshSessions]);
 
-  useEffect(() => {
+  const loadSessionHistory = useCallback((targetSessionId: string) => {
     const requestId = historyRequestRef.current + 1;
     historyRequestRef.current = requestId;
     setIsLoadingHistory(true);
 
-    void fetchSessionHistory(API_BASE_URL, sessionId)
+    void fetchSessionHistory(API_BASE_URL, targetSessionId)
       .then((history) => {
         if (historyRequestRef.current !== requestId) {
           return;
@@ -105,7 +111,28 @@ function App() {
           setIsLoadingHistory(false);
         }
       });
-  }, [replaceMessages, sessionId]);
+  }, [replaceMessages]);
+
+  useEffect(() => {
+    loadSessionHistory(sessionId);
+  }, [loadSessionHistory, sessionId]);
+
+  useEffect(() => {
+    if (connectionStatus !== "connected" || connectionVersion === 0) {
+      return;
+    }
+
+    const previousVersion = lastConnectionVersionRef.current;
+    if (previousVersion === connectionVersion) {
+      return;
+    }
+    lastConnectionVersionRef.current = connectionVersion;
+    if (previousVersion !== 0) {
+      // A new socket cannot replay deltas. Reload only persisted history once
+      // the replacement connection has opened.
+      loadSessionHistory(activeSessionIdRef.current);
+    }
+  }, [connectionStatus, connectionVersion, loadSessionHistory]);
 
   useEffect(() => {
     if (wasSendingRef.current && !isSending) {
@@ -115,8 +142,13 @@ function App() {
   }, [isSending, refreshSessions]);
 
   const canSend = Boolean(
-    connectionStatus === "connected" && !isSending && draft.trim(),
+    connectionStatus === "connected" &&
+      !isSending &&
+      !isLoadingHistory &&
+      draft.trim(),
   );
+  const isComposerDisabled =
+    isSending || isLoadingHistory || connectionStatus !== "connected";
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -146,6 +178,10 @@ function App() {
     if (stopGeneration()) {
       shouldFollowLatestRef.current = true;
     }
+  }
+
+  function handleReconnect() {
+    reconnect();
   }
 
   function selectSession(nextSessionId: string) {
@@ -232,9 +268,21 @@ function App() {
           <section className="chat-panel" aria-labelledby="conversation-title">
             <div className="chat-panel__header">
               <h2 id="conversation-title">Conversation</h2>
-              <span className={`status-badge status-badge--${connectionStatus}`}>
-                {STATUS_LABELS[connectionStatus]}
-              </span>
+              <div className="chat-panel__connection">
+                <span className={`status-badge status-badge--${connectionStatus}`}>
+                  {STATUS_LABELS[connectionStatus]}
+                </span>
+                {connectionStatus === "error" ||
+                connectionStatus === "disconnected" ? (
+                  <button
+                    type="button"
+                    className="connection-retry"
+                    onClick={handleReconnect}
+                  >
+                    Reconnect
+                  </button>
+                ) : null}
+              </div>
             </div>
 
             <div className="chat-panel__body">
@@ -297,7 +345,7 @@ function App() {
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder="Ask Nanobot anything..."
                 rows={2}
-                disabled={isSending}
+                disabled={isComposerDisabled}
               />
               <div className="composer__actions">
                 {isSending ? (

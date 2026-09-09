@@ -226,6 +226,12 @@
   font-size: 0.95rem;
 }
 
+.chat-panel__connection {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .status-badge {
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
@@ -241,7 +247,8 @@
   background: #dcefe7;
 }
 
-.status-badge--connecting {
+.status-badge--connecting,
+.status-badge--reconnecting {
   color: #8a5c00;
   background: #fff2d8;
 }
@@ -250,6 +257,24 @@
 .status-badge--error {
   color: #9c2f20;
   background: #fbe3df;
+}
+
+.connection-retry {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid #8fbeab;
+  border-radius: 999px;
+  color: #0d6b5b;
+  background: #ffffff;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.connection-retry:hover,
+.connection-retry:focus-visible {
+  border-color: #0d6b5b;
+  background: #edf5f0;
+  outline: none;
 }
 
 .connection-error {

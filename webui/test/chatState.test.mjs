@@ -12,8 +12,14 @@ import {
   markConnected,
   markConnectionError,
   markDisconnected,
+  markReconnectFailed,
+  markReconnecting,
   replaceChatHistory,
 } from "../.test-build/hooks/chatState.js";
+import {
+  DEFAULT_RECONNECT_DELAYS_MS,
+  createWebSocketConnection,
+} from "../.test-build/hooks/webSocketConnection.js";
 import {
   createWebSocketClientMessage,
   createWebSocketStopMessage,
@@ -43,6 +49,152 @@ test("connection state reports connecting, connected, disconnected, and errors",
   state = markConnectionError(state, "Could not connect to Nanobot.");
   assert.equal(state.connectionStatus, "error");
   assert.equal(state.error, "Could not connect to Nanobot.");
+});
+
+test("a stream interruption discards unconfirmed output before persisted history replaces it", () => {
+  let state = beginUserMessage(createInitialChatState(), "Unconfirmed user message");
+  state = applyServerEvent(state, {
+    type: "delta",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "Unconfirmed assistant delta",
+  });
+
+  state = markReconnecting(state);
+  assert.equal(state.connectionStatus, "reconnecting");
+  assert.equal(state.isSending, false);
+  assert.deepEqual(
+    state.messages.map(({ role, content }) => ({ role, content })),
+    [{ role: "user", content: "Unconfirmed user message" }],
+  );
+
+  state = replaceChatHistory(state, [
+    { role: "user", content: "Persisted user message" },
+    { role: "assistant", content: "Persisted reply", toolCalls: [] },
+  ]);
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[1].content, "Persisted reply");
+
+  state = markReconnectFailed(state);
+  assert.equal(state.connectionStatus, "error");
+  assert.match(state.error, /Could not reconnect/);
+});
+
+test("connection lifecycle retries with bounded incremental delays and reconnects once", () => {
+  const scheduler = createManualScheduler();
+  const sockets = [];
+  const events = [];
+  const connection = createWebSocketConnection({
+    url: "ws://127.0.0.1:8765/ws",
+    reconnectDelaysMs: [10, 20],
+    createSocket: () => {
+      const socket = new FakeWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clear,
+    callbacks: {
+      onOpen: (reconnected) => events.push(`open:${reconnected}`),
+      onMessage: (data) => events.push(`message:${data}`),
+      onReconnecting: (attempt, delayMs) =>
+        events.push(`retry:${attempt}:${delayMs}`),
+      onReconnectFailed: () => events.push("failed"),
+    },
+  });
+
+  connection.start();
+  sockets[0].open();
+  sockets[0].fail();
+
+  assert.deepEqual(events, ["open:false", "retry:1:10"]);
+  scheduler.runNext();
+  assert.equal(sockets.length, 2);
+
+  sockets[1].open();
+  assert.equal(connection.isOpen(), true);
+  assert.deepEqual(events, ["open:false", "retry:1:10", "open:true"]);
+  assert.deepEqual(DEFAULT_RECONNECT_DELAYS_MS, [500, 1_000, 1_500]);
+});
+
+test("connection retry attempts are finite and manual close never schedules another socket", () => {
+  const scheduler = createManualScheduler();
+  const sockets = [];
+  const events = [];
+  const connection = createWebSocketConnection({
+    url: "ws://127.0.0.1:8765/ws",
+    reconnectDelaysMs: [5, 10],
+    createSocket: () => {
+      const socket = new FakeWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clear,
+    callbacks: {
+      onOpen: () => events.push("open"),
+      onMessage: () => {},
+      onReconnecting: (attempt) => events.push(`retry:${attempt}`),
+      onReconnectFailed: () => events.push("failed"),
+    },
+  });
+
+  connection.start();
+  sockets[0].fail();
+  scheduler.runNext();
+  sockets[1].fail();
+  scheduler.runNext();
+  sockets[2].fail();
+
+  assert.equal(sockets.length, 3);
+  assert.deepEqual(events, ["retry:1", "retry:2", "failed"]);
+
+  connection.reconnect();
+  assert.equal(sockets.length, 4);
+  sockets[3].open();
+  assert.equal(connection.isOpen(), true);
+
+  connection.close();
+  scheduler.runAll();
+  assert.equal(sockets.length, 4);
+});
+
+test("stale callbacks from an earlier socket cannot affect a manual reconnect", () => {
+  const scheduler = createManualScheduler();
+  const sockets = [];
+  const messages = [];
+  const retries = [];
+  const connection = createWebSocketConnection({
+    url: "ws://127.0.0.1:8765/ws",
+    createSocket: () => {
+      const socket = new FakeWebSocket();
+      sockets.push(socket);
+      return socket;
+    },
+    schedule: scheduler.schedule,
+    clearScheduled: scheduler.clear,
+    callbacks: {
+      onOpen: () => {},
+      onMessage: (data) => messages.push(data),
+      onReconnecting: (attempt) => retries.push(attempt),
+      onReconnectFailed: () => {},
+    },
+  });
+
+  connection.start();
+  const firstSocket = sockets[0];
+  firstSocket.open();
+  firstSocket.fail();
+  connection.reconnect();
+
+  firstSocket.receive("stale");
+  firstSocket.close();
+  assert.deepEqual(messages, []);
+  assert.deepEqual(retries, [1]);
+
+  sockets[1].open();
+  sockets[1].receive("current");
+  assert.deepEqual(messages, ["current"]);
 });
 
 test("the client message uses the existing backend WebSocket protocol", () => {
@@ -485,3 +637,62 @@ test("the viewport layout keeps scrolling inside the conversation", async () => 
   assert.match(globalStyles, /body\s*\{[\s\S]*?overflow:\s*hidden;/);
   assert.match(globalStyles, /#root\s*\{[\s\S]*?width:\s*100%;/);
 });
+
+class FakeWebSocket {
+  readyState = 0;
+  onopen = null;
+  onmessage = null;
+  onerror = null;
+  onclose = null;
+
+  open() {
+    this.readyState = 1;
+    this.onopen?.({});
+  }
+
+  receive(data) {
+    this.onmessage?.({ data });
+  }
+
+  fail() {
+    this.onerror?.({});
+  }
+
+  close() {
+    if (this.readyState === 3) {
+      return;
+    }
+    this.readyState = 3;
+    this.onclose?.({});
+  }
+
+  send() {}
+}
+
+function createManualScheduler() {
+  const pending = [];
+  return {
+    schedule(callback, delayMs) {
+      const scheduled = { callback, delayMs, cancelled: false };
+      pending.push(scheduled);
+      return scheduled;
+    },
+    clear(scheduled) {
+      scheduled.cancelled = true;
+    },
+    runNext() {
+      while (pending.length > 0) {
+        const scheduled = pending.shift();
+        if (!scheduled.cancelled) {
+          scheduled.callback();
+          return;
+        }
+      }
+    },
+    runAll() {
+      while (pending.length > 0) {
+        this.runNext();
+      }
+    },
+  };
+}

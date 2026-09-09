@@ -10,6 +10,7 @@ export type { ChatMessage } from "../types/protocol.js";
 export type ConnectionStatus =
   | "connecting"
   | "connected"
+  | "reconnecting"
   | "disconnected"
   | "error";
 
@@ -90,6 +91,28 @@ export function markDisconnected(state: ChatState): ChatState {
     null,
     "disconnected",
     "The Nanobot WebSocket connection was closed.",
+  );
+}
+
+/**
+ * Drop the unconfirmed streaming assistant message before reconnecting.  The
+ * session API will replace visible history after a new connection succeeds,
+ * so a partial delta can never be mistaken for persisted conversation state.
+ */
+export function markReconnecting(state: ChatState): ChatState {
+  return discardInterruptedTurn(
+    state,
+    "reconnecting",
+    "Connection interrupted. Reconnecting and restoring saved history.",
+  );
+}
+
+/** End recovery after bounded retry attempts without retaining a partial turn. */
+export function markReconnectFailed(state: ChatState): ChatState {
+  return discardInterruptedTurn(
+    state,
+    "error",
+    "Could not reconnect to the Nanobot WebSocket service.",
   );
 }
 
@@ -289,6 +312,26 @@ function withAssistantFinished(
     isSending: false,
     isStopping: false,
     activeAssistantId: null,
+  };
+}
+
+function discardInterruptedTurn(
+  state: ChatState,
+  connectionStatus: ConnectionStatus,
+  error: string,
+): ChatState {
+  const activeAssistantId = state.activeAssistantId;
+  return {
+    ...state,
+    connectionStatus,
+    error,
+    isSending: false,
+    isStopping: false,
+    activeAssistantId: null,
+    messages:
+      activeAssistantId === null
+        ? state.messages
+        : state.messages.filter((message) => message.id !== activeAssistantId),
   };
 }
 
