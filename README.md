@@ -9,7 +9,7 @@
 - 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
 - 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus；流式工具执行前可单独通知调用方工具名称和参数。
-- QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话。
+- QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话，并可停止当前 session 的流式生成。
 - 基于 `aiohttp` 的最小本地 HTTP API：`GET /health`、`POST /v1/messages`、`GET /v1/sessions` 与 `GET /v1/sessions/{session_id}`。写请求经 `AgentLoop` 处理并同步返回结果；只读会话接口经 `SessionManager` 返回可见历史，保留 Session、命令、目标模式和工具调用边界。
 - workspace 下的 JSONL Session 持久化、请求侧上下文裁剪和 Session 摘要压缩。当前 turn 仅在 `AgentRunner` 成功返回完整结果后原子保存，失败或取消不会留下半截历史。
 - Session 级持续目标：`GoalState` 独立持久化；`/goal <objective>` 或普通模式下的 `create_goal` 工具保存目标后，都会在同一 session 中投递一次基于当前上下文的目标 turn。`create_goal` 仅负责创建与调度确认，实际目标执行由后续内部消息完成；目标模式中的 `update_goal` 可更新或停止当前目标。目标达到 `max_iterations` 时，会先持久化完整工具批次，再通过内部 continuation 继续执行，并受每个目标的续跑上限约束；中间结果不会发送给用户。目标仅在返回非空文本时标记为 `completed`，空结果和执行异常标记为 `failed`；运行期间的普通用户输入按 session 合并并在工具调用安全点注入当前 Runner，不会并发启动第二个 Runner；`/goal status` 可查询状态，`/goal stop` 会取消 active goal 及其正在执行的目标 turn，进行中的目标会阻止 `/new` 重置会话。
@@ -88,11 +88,11 @@ Invoke-RestMethod http://127.0.0.1:8000/v1/messages `
 {"type":"message","chat_id":"example-chat","content":"你好"}
 ```
 
-服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，工具实际执行前先返回包含工具 ID、名称和参数的 `tool_call`，随后按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
+服务会将同一 session 的 Agent 输出返回对应连接：普通回复为 `message`；启用文本流式时，工具实际执行前先返回包含工具 ID、名称和参数的 `tool_call`，随后按顺序返回多个 `delta`，并以一个 `turn_end` 结束本轮。`turn_end` 包含最终文本，以及 `metadata.tools_used`、`metadata.token_usage` 和 `metadata.stop_reason`。浏览器可在流式回复期间使用现有 `message` 协议发送 `content: "/stop"` 取消对应 session；服务会返回 `stop_reason="cancelled"` 的 `turn_end`，已收到的 delta 会保留，未完成的 turn 不会写入 Session。QQ 默认关闭流式，WebSocket 默认开启，可通过 `channel.qq.streaming` 和 `channel.websocket.streaming` 调整。当前不提供认证或重连恢复，因此仅适合受信任的本地开发环境。
 
 ## Web UI
 
-`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `tool_call`、`delta` 与 `turn_end` 事件间展示工具进度和累积流式回复；通过本地只读 HTTP API 显示持久化会话列表、历史 assistant tool call 和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
+`webui/` 是与 Python 后端解耦的 React + TypeScript + Vite 前端。它通过既有 WebSocket Channel 发送现有 `message` 协议，并在 `tool_call`、`delta` 与 `turn_end` 事件间展示工具进度和累积流式回复；流式 turn 期间可点击停止，已收到的内容会保留并在取消后恢复输入。通过本地只读 HTTP API 显示持久化会话列表、历史 assistant tool call 和选中会话的历史。新建会话只生成新的浏览器 session ID，首次发送后才会保存。当前不包含认证、自动重连、多会话订阅、重命名、删除或搜索。
 
 ```powershell
 cd webui

@@ -17,6 +17,7 @@ export type ChatState = {
   connectionStatus: ConnectionStatus;
   error: string | null;
   isSending: boolean;
+  isStopping: boolean;
   messages: ChatMessage[];
   activeAssistantId: string | null;
   nextMessageSequence: number;
@@ -27,6 +28,7 @@ export function createInitialChatState(): ChatState {
     connectionStatus: "connecting",
     error: null,
     isSending: false,
+    isStopping: false,
     messages: [],
     activeAssistantId: null,
     nextMessageSequence: 0,
@@ -59,6 +61,7 @@ export function replaceChatHistory(
     ...state,
     error: null,
     isSending: false,
+    isStopping: false,
     messages: visibleMessages,
     activeAssistantId: null,
     nextMessageSequence: visibleMessages.length,
@@ -104,6 +107,7 @@ export function beginUserMessage(state: ChatState, content: string): ChatState {
     ...state,
     error: null,
     isSending: true,
+    isStopping: false,
     activeAssistantId: null,
     nextMessageSequence,
     messages: [
@@ -115,6 +119,18 @@ export function beginUserMessage(state: ChatState, content: string): ChatState {
         isStreaming: false,
       },
     ],
+  };
+}
+
+/** Mark one active streaming turn as stopping without adding a user message. */
+export function beginStopRequest(state: ChatState): ChatState {
+  if (!state.isSending || state.isStopping) {
+    return state;
+  }
+  return {
+    ...state,
+    error: null,
+    isStopping: true,
   };
 }
 
@@ -227,6 +243,7 @@ function withAssistantFinished(
       connectionStatus,
       error,
       isSending: false,
+      isStopping: false,
       activeAssistantId: null,
       messages: state.messages.map((message) =>
         message.id === state.activeAssistantId
@@ -250,6 +267,7 @@ function withAssistantFinished(
       connectionStatus,
       error,
       isSending: false,
+      isStopping: false,
       nextMessageSequence,
       messages: [
         ...state.messages,
@@ -269,6 +287,7 @@ function withAssistantFinished(
     connectionStatus,
     error,
     isSending: false,
+    isStopping: false,
     activeAssistantId: null,
   };
 }

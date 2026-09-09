@@ -28,7 +28,7 @@ python -m nanobot [--config <path>] [--workspace <path>]
 | `/goal <objective>` | 为当前 session 创建并持久化一个 active goal。已有 active goal 时不会覆盖；已完成、失败或取消的目标可被替换。保存成功后，Agent 会在同一 session 中开始执行目标。 |
 | `/goal status` | 显示当前 session 的目标状态与目标描述；不调用 LLM。 |
 | `/goal stop` | 将当前 active goal 设为 `cancelled` 并持久化；如果目标 turn 正在执行，同时取消该任务。不调用 LLM，也不会启动新的目标执行。 |
-| `/stop` | 请求取消当前 session 正在运行的普通 Agent turn。没有活动 turn 时会明确提示。它不会取消后台 Subagent；请使用 `/subagents cancel`。 |
+| `/stop` | 请求取消当前 session 正在运行的普通 Agent turn。没有活动 turn 时会明确提示。Web UI 的“停止”按钮复用此命令；流式回复会先收到 `stop_reason="cancelled"` 的 `turn_end` 并保留已显示的部分文本。它不会取消后台 Subagent；请使用 `/subagents cancel`。 |
 | `/compact` | 对当前 session 较早的完整对话轮次执行已有的摘要压缩；没有可压缩内容时只返回提示。 |
 | `/memory` | 只读显示当前 workspace 的长期记忆 `MEMORY.md`。文件为空或不存在时返回提示；内容过长会截断。 |
 | `/subagents` | 列出当前 session 创建的后台 Subagent 任务，包含任务 ID、状态和任务描述。 |

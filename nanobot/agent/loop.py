@@ -141,6 +141,9 @@ class AgentLoop:
         self._session_locks: dict[str, asyncio.Lock] = {}
         # 普通 turn 在真正开始前就登记，保证紧随其后的 /stop 也能取消它。
         self._active_turn_tasks: dict[str, set[asyncio.Task[Any]]] = {}
+        # 保留流式 turn 的原始路由，以便 /stop 能为浏览器发布同一轮的
+        # turn_end，而不把取消状态误发到其他 session。
+        self._streaming_turns: dict[asyncio.Task[Any], InboundMessage] = {}
         # source=goal 的内部 turn 在执行期间独占目标模式；/goal 控制命令可据此绕过 session lock。
         self._goal_turn_tasks: dict[str, asyncio.Task[Any]] = {}
         # 目标运行期间的普通用户输入只由当前 Runner 在安全检查点注入。
@@ -261,6 +264,7 @@ class AgentLoop:
             await self._memory_events.close()
         self._inbound_tasks.clear()
         self._active_turn_tasks.clear()
+        self._streaming_turns.clear()
         self._goal_turn_tasks.clear()
         self._pending_user_messages.clear()
 
@@ -321,6 +325,7 @@ class AgentLoop:
             self._track_turn_task(
                 session_key,
                 task,
+                inbound=inbound,
             )
             if _is_goal_message(inbound):
                 self._track_goal_turn_task(
@@ -415,7 +420,7 @@ class AgentLoop:
             # after a completed, cancelled, or failed goal.
             logger.info("Ignoring goal turn because its goal is no longer active")
             return None
-        self._track_turn_task(session_key, task)
+        self._track_turn_task(session_key, task, inbound=inbound)
         if is_goal_turn:
             self._track_goal_turn_task(session_key, task)
         try:
@@ -642,8 +647,16 @@ class AgentLoop:
             self._session_locks[session_key] = lock
         return lock
 
-    def _track_turn_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
+    def _track_turn_task(
+        self,
+        session_key: str,
+        task: asyncio.Task[Any],
+        *,
+        inbound: InboundMessage | None = None,
+    ) -> None:
         tasks = self._active_turn_tasks.setdefault(session_key, set())
+        if inbound is not None and _is_streaming_message(inbound):
+            self._streaming_turns[task] = inbound
         if task in tasks:
             return
         tasks.add(task)
@@ -663,6 +676,7 @@ class AgentLoop:
         )
 
     def _untrack_turn_task(self, session_key: str, task: asyncio.Task[Any]) -> None:
+        self._streaming_turns.pop(task, None)
         tasks = self._active_turn_tasks.get(session_key)
         if tasks is None:
             return
@@ -791,7 +805,7 @@ class AgentLoop:
         )
         return (HumanMessage(content=_GOAL_INJECTION_TEMPLATE.format(messages=content)),)
 
-    def _cancel_active_turn(self, session_key: str) -> bool:
+    async def _cancel_active_turn(self, session_key: str) -> bool:
         # Do not let input collected for a cancelled goal leak into a later turn.
         self._pending_user_messages.pop(session_key, None)
         current_task = asyncio.current_task()
@@ -802,11 +816,44 @@ class AgentLoop:
             for task in tasks
             if not task.done() and task is not current_task
         )
+        # Queue terminal stream events before task cancellation.  The original
+        # task still receives and re-raises CancelledError, so incomplete tool
+        # call batches never reach Session persistence.
+        await self._publish_cancelled_stream_ends(active_tasks)
         for task in active_tasks:
             task.cancel()
         if active_tasks:
             logger.info("Cancelling active agent turns (count=%d)", len(active_tasks))
         return bool(active_tasks)
+
+    async def _publish_cancelled_stream_ends(
+        self,
+        tasks: tuple[asyncio.Task[Any], ...],
+    ) -> None:
+        if self._message_bus is None:
+            return
+        for task in tasks:
+            inbound = self._streaming_turns.get(task)
+            if inbound is None:
+                continue
+            try:
+                await self._message_bus.publish_outbound(
+                    _outbound_message(
+                        inbound,
+                        "",
+                        metadata={
+                            **inbound.metadata,
+                            "event": "turn_end",
+                            "tools_used": [],
+                            "token_usage": None,
+                            "stop_reason": "cancelled",
+                        },
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Failed to publish a cancelled streaming turn")
 
     def _cancel_goal_turn(self, session_key: str) -> bool:
         self._pending_user_messages.pop(session_key, None)

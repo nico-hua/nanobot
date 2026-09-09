@@ -296,6 +296,25 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(channel.connection_task_count, 0)
 
+    async def test_client_disconnect_requests_stop_for_its_last_session(self) -> None:
+        bus = MessageBus()
+        channel = await self._start_channel(bus)
+        socket = await self._connect(channel)
+        await socket.receive_json(timeout=1)
+        await self._send_client_message(socket, "chat-1", "session-1", "Hello")
+        await bus.consume_inbound()
+
+        await socket.close()
+        stop = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+
+        self.assertEqual(stop.content, "/stop")
+        self.assertEqual(stop.chat_id, "chat-1")
+        self.assertEqual(stop.session_id, "session-1")
+        self.assertEqual(
+            stop.metadata,
+            {"streaming": True, "source": "websocket_disconnect"},
+        )
+
     async def test_stop_closes_active_connections_and_releases_resources(self) -> None:
         channel = await self._start_channel(MessageBus())
         socket = await self._connect(channel)

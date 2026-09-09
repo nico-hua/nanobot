@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   createWebSocketClientMessage,
+  createWebSocketStopMessage,
   isEventForSession,
   parseServerEvent,
   type PersistedSessionMessage,
 } from "../types/protocol";
 import {
   applyServerEvent,
+  beginStopRequest,
   beginConnection,
   beginUserMessage,
   createInitialChatState,
@@ -38,6 +40,7 @@ export function useNanobotWebSocket({
 }: UseNanobotWebSocketOptions) {
   const [state, setState] = useState(createInitialChatState);
   const socketRef = useRef<WebSocket | null>(null);
+  const stopRequestedRef = useRef(false);
   const activeSessionRef = useRef(sessionId);
   activeSessionRef.current = sessionId;
 
@@ -86,6 +89,13 @@ export function useNanobotWebSocket({
         if (!isEventForSession(event, activeSessionRef.current)) {
           return;
         }
+        if (
+          event.type === "turn_end" ||
+          event.type === "message" ||
+          event.type === "error"
+        ) {
+          stopRequestedRef.current = false;
+        }
         setState((currentState) => applyServerEvent(currentState, event));
       } catch {
         setState((currentState) =>
@@ -103,6 +113,7 @@ export function useNanobotWebSocket({
       );
     };
     socket.onclose = () => {
+      stopRequestedRef.current = false;
       if (!closedByEffect && !connectionFailed) {
         setState(markDisconnected);
       }
@@ -135,6 +146,7 @@ export function useNanobotWebSocket({
       }
 
       setState((currentState) => beginUserMessage(currentState, text));
+      stopRequestedRef.current = false;
       try {
         socket.send(
           JSON.stringify(createWebSocketClientMessage(chatId, sessionId, text)),
@@ -153,6 +165,38 @@ export function useNanobotWebSocket({
     [chatId, sessionId],
   );
 
+  const stopGeneration = useCallback((): boolean => {
+    const socket = socketRef.current;
+    if (!state.isSending || stopRequestedRef.current) {
+      return false;
+    }
+    if (socket === null || socket.readyState !== WebSocket.OPEN) {
+      setState((currentState) =>
+        markServerError(
+          currentState,
+          "Nanobot is not connected. The current generation could not be stopped.",
+        ),
+      );
+      return false;
+    }
+
+    stopRequestedRef.current = true;
+    setState(beginStopRequest);
+    try {
+      socket.send(JSON.stringify(createWebSocketStopMessage(chatId, sessionId)));
+    } catch {
+      stopRequestedRef.current = false;
+      setState((currentState) =>
+        markConnectionError(
+          currentState,
+          "The stop request could not be sent to Nanobot.",
+        ),
+      );
+      return false;
+    }
+    return true;
+  }, [chatId, sessionId, state.isSending]);
+
   const replaceMessages = useCallback(
     (messages: readonly PersistedSessionMessage[]) => {
       setState((currentState) => replaceChatHistory(currentState, messages));
@@ -164,8 +208,10 @@ export function useNanobotWebSocket({
     connectionStatus: state.connectionStatus,
     error: state.error,
     isSending: state.isSending,
+    isStopping: state.isStopping,
     messages: state.messages,
     sendMessage,
+    stopGeneration,
     replaceMessages,
   };
 }

@@ -33,6 +33,16 @@ before text `delta` events. The UI attaches each tool's name and formatted
 arguments to the current assistant response, then uses `turn_end` to finalize
 the complete text without creating a duplicate message.
 
+## Stop current generation
+
+While a streaming turn is active, the UI shows **Stop**. It sends the existing
+`message` payload with `content: "/stop"` for the active chat and session; no
+new WebSocket protocol event is introduced. The backend replies with a
+`turn_end` event whose metadata has `stop_reason: "cancelled"`. Already received
+text remains visible, while the incomplete turn is not persisted as session
+history. Closing the browser connection follows the same cancellation path for
+its last bound session.
+
 ## Prerequisites
 
 Use a Node.js version supported by Vite 8. The project is developed with Node

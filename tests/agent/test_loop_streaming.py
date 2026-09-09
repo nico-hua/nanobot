@@ -97,6 +97,87 @@ class ToolCallingStreamingProvider(LLMProvider):
         return LLMResponse(content="Done.", finish_reason="stop")
 
 
+class BlockingStreamingProvider(LLMProvider):
+    """A stream that emits one delta and waits until AgentLoop cancels it."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        raise AssertionError("Cancellation test must use provider streaming")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        self.started.set()
+        if on_delta is not None:
+            await on_delta("Partial reply.")
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        return LLMResponse(content="Completed reply.", finish_reason="stop")
+
+
+class PerSessionBlockingStreamingProvider(LLMProvider):
+    """Hold independently-addressed streaming turns for cancellation tests."""
+
+    def __init__(self) -> None:
+        self.started = {"First request.": asyncio.Event(), "Second request.": asyncio.Event()}
+        self.cancelled = {"First request.": asyncio.Event(), "Second request.": asyncio.Event()}
+        self.release = {"First request.": asyncio.Event(), "Second request.": asyncio.Event()}
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        raise AssertionError("Cancellation test must use provider streaming")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        del tools, max_tokens, temperature
+        content = next(
+            message.content
+            for message in reversed(messages)
+            if isinstance(message, HumanMessage)
+        )
+        self.started[content].set()
+        if on_delta is not None:
+            await on_delta(f"{content} partial")
+        try:
+            await self.release[content].wait()
+        except asyncio.CancelledError:
+            self.cancelled[content].set()
+            raise
+        return LLMResponse(content=f"{content} complete", finish_reason="stop")
+
+
 class EchoTool(Tool):
     def __init__(self) -> None:
         super().__init__(
@@ -229,6 +310,114 @@ class AgentLoopStreamingTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_stop_cancels_one_stream_and_publishes_a_cancelled_turn_end(self) -> None:
+        provider = BlockingStreamingProvider()
+        bus = MessageBus()
+        loop = self._loop(provider, message_bus=bus)
+        worker = asyncio.create_task(loop.run())
+        inbound = self._inbound("Streaming request.", metadata={"streaming": True})
+
+        try:
+            await bus.publish_inbound(inbound)
+            await asyncio.wait_for(provider.started.wait(), timeout=1)
+            delta = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            self.assertEqual(delta.metadata["event"], "delta")
+            self.assertEqual(delta.content, "Partial reply.")
+
+            await bus.publish_inbound(
+                self._inbound("/stop", metadata={"streaming": True})
+            )
+            turn_end = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            acknowledgement = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            await asyncio.wait_for(provider.cancelled.wait(), timeout=1)
+            await _wait_until(lambda: "session-1" not in loop._active_turn_tasks)
+
+            self.assertEqual(turn_end.content, "")
+            self.assertEqual(
+                turn_end.metadata,
+                {
+                    "streaming": True,
+                    "event": "turn_end",
+                    "tools_used": [],
+                    "token_usage": None,
+                    "stop_reason": "cancelled",
+                },
+            )
+            self.assertIn("已请求停止", acknowledgement.content)
+            self.assertEqual(loop._session_manager.get_or_create("session-1").messages, ())
+            self.assertEqual(loop._streaming_turns, {})
+        finally:
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+
+    async def test_stop_only_cancels_the_matching_streaming_session(self) -> None:
+        provider = PerSessionBlockingStreamingProvider()
+        bus = MessageBus()
+        loop = self._loop(provider, message_bus=bus)
+        worker = asyncio.create_task(loop.run())
+
+        try:
+            await bus.publish_inbound(
+                self._inbound(
+                    "First request.",
+                    session_id="session-one",
+                    metadata={"streaming": True},
+                )
+            )
+            await bus.publish_inbound(
+                self._inbound(
+                    "Second request.",
+                    session_id="session-two",
+                    metadata={"streaming": True},
+                )
+            )
+            await asyncio.wait_for(provider.started["First request."].wait(), timeout=1)
+            await asyncio.wait_for(provider.started["Second request."].wait(), timeout=1)
+
+            # Consume the two initial deltas in either task scheduling order.
+            await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            await bus.publish_inbound(
+                self._inbound(
+                    "/stop",
+                    session_id="session-one",
+                    metadata={"streaming": True},
+                )
+            )
+            cancelled_turn_end = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+            await asyncio.wait_for(provider.cancelled["First request."].wait(), timeout=1)
+
+            self.assertEqual(cancelled_turn_end.session_id, "session-one")
+            self.assertEqual(cancelled_turn_end.metadata["stop_reason"], "cancelled")
+            self.assertFalse(provider.cancelled["Second request."].is_set())
+            self.assertEqual(
+                loop._session_manager.get_or_create("session-one").messages,
+                (),
+            )
+
+            provider.release["Second request."].set()
+            completed_turn_end = await _consume_until(
+                bus,
+                lambda message: (
+                    message.session_id == "session-two"
+                    and message.metadata.get("event") == "turn_end"
+                ),
+            )
+            self.assertEqual(completed_turn_end.content, "Second request. complete")
+            self.assertEqual(
+                loop._session_manager.get_or_create("session-two").messages,
+                (
+                    HumanMessage(content="Second request."),
+                    AIMessage(content="Second request. complete"),
+                ),
+            )
+        finally:
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+
     def _loop(
         self,
         provider: LLMProvider,
@@ -250,13 +439,33 @@ class AgentLoopStreamingTest(unittest.IsolatedAsyncioTestCase):
     def _inbound(
         content: str,
         *,
+        session_id: str = "session-1",
         metadata: dict[str, object] | None = None,
     ) -> InboundMessage:
         return InboundMessage(
             channel="test",
             chat_id="chat-1",
             sender_id="sender-1",
-            session_id="session-1",
+            session_id=session_id,
             content=content,
             metadata=metadata or {},
         )
+
+
+async def _consume_until(
+    bus: MessageBus,
+    predicate: Callable[[object], bool],
+):
+    for _ in range(8):
+        message = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        if predicate(message):
+            return message
+    raise AssertionError("Expected outbound message was not published")
+
+
+async def _wait_until(predicate: Callable[[], bool]) -> None:
+    async def wait() -> None:
+        while not predicate():
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(wait(), timeout=1)

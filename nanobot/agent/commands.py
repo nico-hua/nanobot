@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -41,7 +42,7 @@ class CommandContext:
     session_compactor: SessionCompactor | None
     memory_store: MemoryStore | None
     subagent_manager: SubagentManager | None
-    cancel_active_turn: Callable[[], bool]
+    cancel_active_turn: Callable[[], bool | Awaitable[bool]]
     cancel_goal_turn: Callable[[], bool]
 
 
@@ -67,7 +68,7 @@ class CommandRouter:
         subagent_manager: SubagentManager | None = None,
         message_bus: MessageBus | None = None,
         memory_output_limit: int = DEFAULT_MEMORY_OUTPUT_LIMIT,
-        cancel_active_turn: Callable[[str], bool] | None = None,
+        cancel_active_turn: Callable[[str], bool | Awaitable[bool]] | None = None,
         cancel_goal_turn: Callable[[str], bool] | None = None,
     ) -> None:
         if not isinstance(session_manager, SessionManager):
@@ -237,7 +238,10 @@ class CommandRouter:
         return "已开始新的会话，当前会话的短期历史已清空。"
 
     async def _handle_stop(self, context: CommandContext) -> str:
-        if context.cancel_active_turn():
+        cancelled = context.cancel_active_turn()
+        if inspect.isawaitable(cancelled):
+            cancelled = await cancelled
+        if cancelled:
             return "已请求停止当前会话的执行。"
         return "当前会话没有正在执行的请求。"
 

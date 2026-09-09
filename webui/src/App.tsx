@@ -47,8 +47,10 @@ function App() {
     connectionStatus,
     error,
     isSending,
+    isStopping,
     messages,
     sendMessage,
+    stopGeneration,
     replaceMessages,
   } = useNanobotWebSocket({
     url: import.meta.env.VITE_NANOBOT_WEBSOCKET_URL,
@@ -137,6 +139,12 @@ function App() {
       // A sent message intentionally returns the reader to the active turn.
       shouldFollowLatestRef.current = true;
       setDraft("");
+    }
+  }
+
+  function handleStop() {
+    if (stopGeneration()) {
+      shouldFollowLatestRef.current = true;
     }
   }
 
@@ -291,9 +299,21 @@ function App() {
                 rows={2}
                 disabled={isSending}
               />
-              <button type="submit" disabled={!canSend}>
-                {isSending ? "Sending..." : "Send"}
-              </button>
+              <div className="composer__actions">
+                {isSending ? (
+                  <button
+                    type="button"
+                    className="composer__stop"
+                    onClick={handleStop}
+                    disabled={isStopping}
+                  >
+                    {isStopping ? "Stopping..." : "Stop"}
+                  </button>
+                ) : null}
+                <button type="submit" disabled={!canSend}>
+                  {isSending ? "Sending..." : "Send"}
+                </button>
+              </div>
             </div>
           </form>
         </div>

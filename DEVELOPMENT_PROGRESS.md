@@ -97,7 +97,9 @@
 - [x] Web UI 将 WebSocket 状态和协议处理封装为独立 Hook 与纯状态辅助函数；当前会话内可按顺序累积 delta，并以 `turn_end` 收束最终文本，避免重复展示。
 - [x] 为 Web UI 增加会话列表与切换：`HttpApiService` 提供只读 `GET /v1/sessions` 和 `GET /v1/sessions/{session_id}`，经共享 `SessionManager` 读取持久化历史，并仅返回 user/assistant 可见消息。前端通过 `VITE_NANOBOT_API_URL` 加载列表和历史；新会话使用浏览器生成的唯一 session ID，首次发送后才持久化。单一 WebSocket 连接可在发送新会话消息时重新绑定，前端会忽略已切走会话的迟到流式事件。
 - [x] 增加工具调用展示链路：`AgentRunSpec` 保留文本 `on_delta` 回调并新增独立 `on_tool_call` 回调；流式工具在实际执行前经 AgentLoop 与 MessageBus 依次发布 `tool_call`、`delta`、`turn_end`。WebSocket 转发工具 ID、名称和参数；Session 历史接口返回 assistant 的持久化 tool call（不暴露 tool result），Web UI 以折叠详情附着到当前 assistant 响应，避免空工具调用消息显示为 “Thinking” 或重复创建消息。
-- [x] 本轮聚焦验证：AgentRunner、AgentLoop 流式、WebSocket Channel 与 HTTP API 共 `39` 项测试通过；Web UI 应用和测试 TypeScript 配置通过无输出类型检查。
+- [x] 为 Web UI 增加“停止当前生成”：流式回复期间前端复用 `/stop` 请求当前 session；AgentLoop 按 session 跟踪并取消活动任务，取消前经 MessageBus 发布 `turn_end(stop_reason="cancelled")`，保留已到达的 delta，且不持久化半截 user/tool 消息。WebSocket 连接关闭时也会沿同一路径请求停止其最后绑定的 session；非流式 QQ 行为不变。
+- [x] 本轮聚焦验证：`tests.agent.test_loop_streaming`、`tests.agent.test_commands` 和 `tests.channels.websocket.test_channel` 共 `46` 项测试通过；Web UI 应用与测试 TypeScript 配置通过 `tsc --noEmit` 类型检查。
+- [x] 此前聚焦验证：AgentRunner、AgentLoop 流式、WebSocket Channel 与 HTTP API 共 `39` 项测试通过；Web UI 应用和测试 TypeScript 配置通过无输出类型检查。
 - [x] 此前完整离线测试：`415 passed, 7 skipped`。
 
 ## 待开发功能

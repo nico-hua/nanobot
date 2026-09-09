@@ -41,7 +41,9 @@ class WebSocketChannel(BaseChannel):
         self._runner: web.AppRunner | None = None
         self._connections_by_session: dict[str, web.WebSocketResponse] = {}
         self._connection_sessions: dict[web.WebSocketResponse, str | None] = {}
+        self._connection_routes: dict[web.WebSocketResponse, tuple[str, str]] = {}
         self._connection_tasks: set[asyncio.Task[Any]] = set()
+        self._stopping = False
 
     @property
     def port(self) -> int | None:
@@ -71,6 +73,8 @@ class WebSocketChannel(BaseChannel):
 
         if self.started:
             return
+
+        self._stopping = False
 
         runner = web.AppRunner(
             self._app,
@@ -106,6 +110,7 @@ class WebSocketChannel(BaseChannel):
 
         runner = self._runner
         self._runner = None
+        self._stopping = True
         logger.info("Stopping WebSocket channel")
         try:
             await self._close_connections()
@@ -121,8 +126,10 @@ class WebSocketChannel(BaseChannel):
                 finally:
                     self._connections_by_session.clear()
                     self._connection_sessions.clear()
+                    self._connection_routes.clear()
                     if self.started:
                         await super().stop()
+                    self._stopping = False
                     logger.info("WebSocket channel stopped")
 
     async def send(self, message: OutboundMessage) -> None:
@@ -229,11 +236,15 @@ class WebSocketChannel(BaseChannel):
                     logger.warning("WebSocket connection closed with an error")
                     break
         finally:
-            self._remove_connection(connection)
-            if task is not None:
-                self._connection_tasks.discard(task)
-            if not connection.closed:
-                await connection.close()
+            try:
+                if not self._stopping:
+                    await self._request_stop_for_disconnected_session(connection)
+            finally:
+                self._remove_connection(connection)
+                if task is not None:
+                    self._connection_tasks.discard(task)
+                if not connection.closed:
+                    await connection.close()
         return connection
 
     async def _handle_client_text(
@@ -304,6 +315,7 @@ class WebSocketChannel(BaseChannel):
                 session_id,
                 metadata={"streaming": self.config.streaming},
             )
+            self._connection_routes[connection] = (chat_id.strip(), session_id)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -371,9 +383,36 @@ class WebSocketChannel(BaseChannel):
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _remove_connection(self, connection: web.WebSocketResponse) -> None:
+        self._connection_routes.pop(connection, None)
         session_id = self._connection_sessions.pop(connection, None)
         if self._connections_by_session.get(session_id) is connection:
             self._connections_by_session.pop(session_id, None)
+
+    async def _request_stop_for_disconnected_session(
+        self,
+        connection: web.WebSocketResponse,
+    ) -> None:
+        """Ask the normal command path to stop work owned by a closed browser."""
+
+        route = self._connection_routes.get(connection)
+        if route is None:
+            return
+        chat_id, session_id = route
+        try:
+            await self.receive_external(
+                "/stop",
+                chat_id,
+                _WEBSOCKET_SENDER,
+                session_id,
+                metadata={
+                    "streaming": self.config.streaming,
+                    "source": "websocket_disconnect",
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("WebSocket channel failed to request turn cancellation")
 
     async def _send_error(
         self,

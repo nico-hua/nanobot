@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   applyServerEvent,
+  beginStopRequest,
   beginUserMessage,
   createInitialChatState,
   markConnected,
@@ -15,6 +16,7 @@ import {
 } from "../.test-build/hooks/chatState.js";
 import {
   createWebSocketClientMessage,
+  createWebSocketStopMessage,
   isEventForSession,
   parseServerEvent,
 } from "../.test-build/types/protocol.js";
@@ -53,6 +55,15 @@ test("the client message uses the existing backend WebSocket protocol", () => {
       content: "Hello",
     },
   );
+});
+
+test("the stop request reuses the existing slash-command WebSocket protocol", () => {
+  assert.deepEqual(createWebSocketStopMessage("chat-1", "session-1"), {
+    type: "message",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "/stop",
+  });
 });
 
 test("the protocol parser accepts only the existing server event contract", () => {
@@ -285,6 +296,34 @@ test("deltas accumulate into one assistant message and turn_end does not duplica
     toolCalls: [],
   });
   assert.equal(state.isSending, false);
+});
+
+test("a stop request preserves partial streamed text and restores input state", () => {
+  let state = beginUserMessage(createInitialChatState(), "Hello");
+  state = applyServerEvent(state, {
+    type: "delta",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "Partial reply",
+  });
+  state = beginStopRequest(state);
+  assert.equal(state.isSending, true);
+  assert.equal(state.isStopping, true);
+  assert.equal(beginStopRequest(state), state);
+
+  state = applyServerEvent(state, {
+    type: "turn_end",
+    chat_id: "chat-1",
+    session_id: "session-1",
+    content: "",
+    metadata: { stop_reason: "cancelled" },
+  });
+
+  assert.equal(state.messages.length, 2);
+  assert.equal(state.messages[1].content, "Partial reply");
+  assert.equal(state.messages[1].isStreaming, false);
+  assert.equal(state.isSending, false);
+  assert.equal(state.isStopping, false);
 });
 
 test("tool calls attach to the current streaming assistant response", () => {

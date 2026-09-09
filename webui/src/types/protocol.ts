@@ -57,6 +57,8 @@ export type WebSocketClientMessage = {
   content: string;
 };
 
+const STOP_COMMAND = "/stop";
+
 export type ReadyEvent = {
   type: "ready";
 };
@@ -113,6 +115,14 @@ export function createWebSocketClientMessage(
     session_id: sessionId,
     content,
   };
+}
+
+/** Reuse the existing slash-command protocol for an in-flight turn stop. */
+export function createWebSocketStopMessage(
+  chatId: string,
+  sessionId: string,
+): WebSocketClientMessage {
+  return createWebSocketClientMessage(chatId, sessionId, STOP_COMMAND);
 }
 
 /** Parse the current backend wire contract without accepting arbitrary JSON. */
