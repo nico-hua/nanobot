@@ -203,11 +203,12 @@ function App() {
   return (
     <main className="app-shell" aria-label="Nanobot chat">
       <header className="app-header">
-        <p className="eyebrow">LOCAL AGENT</p>
+        <img
+          className="app-logo"
+          src="/nanobot-logo.png"
+          alt="Nanobot logo"
+        />
         <h1>Nanobot Web UI</h1>
-        <p className="subtitle">
-          A local chat surface connected to the Nanobot WebSocket channel.
-        </p>
       </header>
 
       <div className="app-workspace">
@@ -319,9 +320,6 @@ function App() {
                         key={message.id}
                         className={`message message--${message.role}`}
                       >
-                        <span className="message__author">
-                          {message.role === "user" ? "You" : "Nanobot"}
-                        </span>
                         <MessageContent {...message} />
                       </li>
                     ))}
@@ -336,15 +334,15 @@ function App() {
             aria-label="Message composer"
             onSubmit={handleSubmit}
           >
-            <label htmlFor="message">Message</label>
             <div className="composer__controls">
               <textarea
                 id="message"
                 name="message"
+                aria-label="Message"
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 placeholder="Ask Nanobot anything..."
-                rows={2}
+                rows={1}
                 disabled={isComposerDisabled}
               />
               <div className="composer__actions">

@@ -615,27 +615,37 @@ test("conversation only follows updates while the reader is near the bottom", ()
   );
 });
 
-test("the viewport layout keeps scrolling inside the conversation", async () => {
-  const [appStyles, globalStyles] = await Promise.all([
+test("the compact viewport layout keeps scrolling inside the conversation", async () => {
+  const [appStyles, globalStyles, appSource] = await Promise.all([
     readFile(new URL("../src/App.css", import.meta.url), "utf8"),
     readFile(new URL("../src/index.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?display:\s*flex;/);
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?flex-direction:\s*column;/);
   assert.match(appStyles, /\.app-shell\s*\{[\s\S]*?height:\s*100dvh;/);
-  assert.match(appStyles, /\.app-workspace\s*\{[\s\S]*?grid-template-columns:/);
+  assert.match(
+    appStyles,
+    /\.app-workspace\s*\{[\s\S]*?grid-template-columns:\s*minmax\(11rem, 14rem\) minmax\(0, 1fr\);/,
+  );
   assert.match(appStyles, /\.app-workspace\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0, 1fr\);/);
   assert.match(appStyles, /\.session-list\s*\{[\s\S]*?overflow-y:\s*auto;/);
   assert.match(appStyles, /\.chat-panel\s*\{[\s\S]*?flex:\s*1 1 auto;/);
   assert.match(appStyles, /\.conversation-scroll\s*\{[\s\S]*?flex:\s*1 1 auto;/);
   assert.match(appStyles, /\.conversation-scroll\s*\{[\s\S]*?overflow-y:\s*auto;/);
-  assert.match(appStyles, /\.composer\s*\{[\s\S]*?padding:\s*0\.65rem 0\.75rem;/);
+  assert.match(appStyles, /\.composer\s*\{[\s\S]*?padding:\s*0\.45rem 0\.55rem;/);
+  assert.match(appStyles, /\.composer textarea\s*\{[\s\S]*?height:\s*2\.45rem;/);
+  assert.match(appStyles, /\.app-logo\s*\{[\s\S]*?width:\s*2\.25rem;/);
   assert.match(appStyles, /\.message--user \.message__content\s*\{[\s\S]*?background:/);
   assert.match(appStyles, /\.message--assistant \.message__content\s*\{[\s\S]*?border-left:/);
   assert.match(appStyles, /@media \(max-width: 40rem\)/);
   assert.match(globalStyles, /body\s*\{[\s\S]*?overflow:\s*hidden;/);
   assert.match(globalStyles, /#root\s*\{[\s\S]*?width:\s*100%;/);
+  assert.match(appSource, /src="\/nanobot-logo\.png"/);
+  assert.doesNotMatch(appSource, /LOCAL AGENT/);
+  assert.doesNotMatch(appSource, /A local chat surface connected/);
+  assert.doesNotMatch(appSource, /message__author/);
 });
 
 class FakeWebSocket {
