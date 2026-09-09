@@ -14,7 +14,13 @@ from nanobot.api import HttpApiService
 from nanobot.bus import MessageBus
 from nanobot.channels import BaseChannel, ChannelManager, FakeChannel
 from nanobot.cli import Application
-from nanobot.config import ApiConfig, MCPServerConfig, NanobotConfig, ProviderConfig
+from nanobot.config import (
+    ApiConfig,
+    AuthConfig,
+    MCPServerConfig,
+    NanobotConfig,
+    ProviderConfig,
+)
 from nanobot.cron import CronCallback, CronService
 from nanobot.memory import MemoryConsolidator
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
@@ -214,11 +220,13 @@ class RecordingApiService:
         loop: RecordingLoop,
         session_manager: SessionManager,
         config: ApiConfig,
+        auth: AuthConfig,
         events: list[str],
     ) -> None:
         self.loop = loop
         self.session_manager = session_manager
         self.config = config
+        self.auth = auth
         self.events = events
         self.started = False
         self.stopped = False
@@ -288,11 +296,13 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             agent_loop: RecordingLoop,
             session_manager: SessionManager,
             api_config: ApiConfig,
+            auth_config: AuthConfig,
         ) -> RecordingApiService:
             service = RecordingApiService(
                 agent_loop,
                 session_manager,
                 api_config,
+                auth_config,
                 events,
             )
             api_services.append(service)
@@ -313,6 +323,7 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(service.loop, loop)
         self.assertEqual(service.session_manager.workspace, self._workspace)
         self.assertTrue(service.config.enabled)
+        self.assertFalse(service.auth.enabled)
         self.assertTrue(service.started)
 
         await app.close()
@@ -337,10 +348,11 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
             config=self._config().model_copy(update={"api": ApiConfig(enabled=True)}),
             cron_service_factory=cron_service_factory,
             api_service_factory=(
-                lambda agent_loop, session_manager, config: CancellingApiService(
+                lambda agent_loop, session_manager, config, auth: CancellingApiService(
                     agent_loop,
                     session_manager,
                     config,
+                    auth,
                     events,
                 )
             ),
@@ -665,7 +677,7 @@ def _fake_application(
     cron_service_factory: Callable[[CronCallback, Path], CronService] | None = None,
     config: NanobotConfig | None = None,
     api_service_factory: Callable[
-        [RecordingLoop, SessionManager, ApiConfig], RecordingApiService
+        [RecordingLoop, SessionManager, ApiConfig, AuthConfig], RecordingApiService
     ]
     | None = None,
 ) -> tuple[Application, FakeChannelManager]:

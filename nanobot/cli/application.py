@@ -13,7 +13,13 @@ from ..agent import AgentLoop, AgentRunner, ContextBuilder
 from ..api import HttpApiService
 from ..bus import MessageBus
 from ..channels import BaseChannel, ChannelManager, create_default_channel_factory
-from ..config import ApiConfig, NanobotConfig, ProviderConfig, load_nanobot_config
+from ..config import (
+    ApiConfig,
+    AuthConfig,
+    NanobotConfig,
+    ProviderConfig,
+    load_nanobot_config,
+)
 from ..cron import CronCallback, CronMessagePublisher, CronService
 from ..mcp import MCPProvider
 from ..memory import MemoryConsolidator, MemoryStore
@@ -44,7 +50,9 @@ AgentLoopFactory = Callable[
 ]
 ChannelManagerFactory = Callable[[MessageBus, tuple[BaseChannel, ...]], ChannelManager]
 CronServiceFactory = Callable[[CronCallback, Path], CronService]
-ApiServiceFactory = Callable[[AgentLoop, SessionManager, ApiConfig], HttpApiService]
+ApiServiceFactory = Callable[
+    [AgentLoop, SessionManager, ApiConfig, AuthConfig], HttpApiService
+]
 
 
 class Application:
@@ -138,6 +146,7 @@ class Application:
             self._agent_loop,
             self._session_manager,
             config.api,
+            config.auth,
         )
         channel = channel_factory(config.default_channel, self._message_bus, config)
         self._channel_manager = channel_manager_factory(self._message_bus, (channel,))

@@ -15,6 +15,14 @@ The frontend reads the following browser-visible values from the repository-root
 - `VITE_NANOBOT_API_URL` must match the local `api.host` and `api.port` in
   `.nanobot/nanobot.json`. It is used only to list saved sessions and load a
   selected transcript.
+- `VITE_NANOBOT_AUTH_TOKEN` is required only when `auth.enabled` is `true`.
+  Copy the generated `auth.token` value from `.nanobot/nanobot.json` into your
+  local `.env`. The token is sent as an HTTP Bearer credential and as the
+  first WebSocket event; the UI never renders it.
+
+When authentication is enabled, the first startup generates and persists a
+token if `auth.token` is empty. Keep the resulting local configuration out of
+shared commits.
 
 ## Sessions
 

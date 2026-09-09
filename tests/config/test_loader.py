@@ -1,9 +1,8 @@
-"""Tests for loading public JSON settings and private environment values."""
+"""Tests for JSON-only runtime configuration loading."""
 
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +12,7 @@ from nanobot.config import ConfigError, load_file_config, load_nanobot_config
 
 
 class ConfigLoaderTest(unittest.TestCase):
-    def test_merges_json_settings_with_api_key_and_resolves_workspace(self) -> None:
+    def test_loads_json_settings_and_resolves_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "nanobot.json"
             config_path.write_text(
@@ -35,6 +34,12 @@ class ConfigLoaderTest(unittest.TestCase):
                         },
                         "channel": {
                             "default": "qq",
+                            "qq": {
+                                "app_id": "test-app-id",
+                                "secret": "test-secret",
+                                "allow_from": ["user-1", "user-2"],
+                                "streaming": True,
+                            },
                             "websocket": {
                                 "host": "127.0.0.1",
                                 "port": 8101,
@@ -42,6 +47,7 @@ class ConfigLoaderTest(unittest.TestCase):
                         },
                         "provider": {
                             "type": "openai_compat",
+                            "api_key": "test-key",
                             "api_base": "https://example.test/v1",
                             "model": "test-model",
                             "max_tokens": 64,
@@ -56,10 +62,9 @@ class ConfigLoaderTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            env_path = Path(directory) / ".env"
-            env_path.write_text("NANOBOT_API_KEY=test-key\n", encoding="utf-8")
 
-            config = load_nanobot_config(config_path, env_path)
+            file_config = load_file_config(config_path)
+            config = load_nanobot_config(config_path)
 
         self.assertEqual(config.workspace, config_path.parent / "workspace")
         self.assertEqual(config.context_window_tokens, 512)
@@ -69,102 +74,111 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertTrue(config.api.enabled)
         self.assertEqual(config.api.port, 8100)
         self.assertEqual(config.api.request_timeout_seconds, 15)
-        self.assertEqual(config.websocket.port, 8101)
+        self.assertIsNone(config.websocket)
         self.assertIn("local", config.mcp_servers)
+        self.assertEqual(file_config.provider.api_key, "test-key")
         self.assertEqual(config.provider.api_key, "test-key")
         self.assertEqual(config.provider.default_model, "test-model")
         self.assertEqual(config.provider.default_max_tokens, 64)
         self.assertEqual(config.provider.default_temperature, 0.3)
-
-    def test_process_environment_overrides_dotenv_api_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = _write_file_config(Path(directory))
-            env_path = Path(directory) / ".env"
-            env_path.write_text("NANOBOT_API_KEY=file-key\n", encoding="utf-8")
-
-            with patch.dict(os.environ, {"NANOBOT_API_KEY": "process-key"}, clear=True):
-                config = load_nanobot_config(config_path, env_path)
-
-        self.assertEqual(config.provider.api_key, "process-key")
-
-    def test_loads_optional_qq_credentials_from_dotenv(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = _write_file_config(Path(directory))
-            file_config = json.loads(config_path.read_text(encoding="utf-8"))
-            file_config["channel"] = {"qq": {"streaming": True}}
-            config_path.write_text(json.dumps(file_config), encoding="utf-8")
-            env_path = Path(directory) / ".env"
-            env_path.write_text(
-                "\n".join(
-                    (
-                        "NANOBOT_API_KEY=test-key",
-                        "NANOBOT_QQ_APP_ID=test-app-id",
-                        "NANOBOT_QQ_SECRET=test-secret",
-                        "NANOBOT_QQ_ALLOW_FROM=user-1, user-2",
-                    )
-                ),
-                encoding="utf-8",
-            )
-
-            config = load_nanobot_config(config_path, env_path)
-
         self.assertIsNotNone(config.qq)
-        self.assertEqual(config.qq.app_id if config.qq else None, "test-app-id")
         self.assertEqual(config.qq.allow_from if config.qq else None, ["user-1", "user-2"])
         self.assertTrue(config.qq.streaming if config.qq else False)
 
-    def test_rejects_incomplete_qq_credentials(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            config_path = _write_file_config(Path(directory))
-            env_path = Path(directory) / ".env"
-            env_path.write_text(
-                "NANOBOT_API_KEY=test-key\nNANOBOT_QQ_APP_ID=test-app-id\n",
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(ConfigError, "QQ configuration"):
-                load_nanobot_config(config_path, env_path)
-
-    def test_rejects_missing_api_key_and_sensitive_json_field(self) -> None:
+    def test_enabled_auth_generates_and_persists_one_token(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             directory_path = Path(directory)
             config_path = _write_file_config(directory_path)
-            env_path = directory_path / ".env"
-            env_path.write_text("", encoding="utf-8")
+            raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+            raw_config["auth"] = {"enabled": True, "token": ""}
+            config_path.write_text(json.dumps(raw_config), encoding="utf-8")
 
-            with self.assertRaisesRegex(ConfigError, "NANOBOT_API_KEY"):
-                load_nanobot_config(config_path, env_path)
+            with patch(
+                "nanobot.config.loader.secrets.token_urlsafe",
+                return_value="generated-static-token",
+            ) as generate_token:
+                first_config = load_nanobot_config(config_path)
 
-            sensitive_path = directory_path / "sensitive.json"
-            sensitive_path.write_text(
-                json.dumps(
-                    {
-                        "workspace": "workspace",
-                        "provider": {
-                            "type": "openai_compat",
-                            "api_base": "https://example.test/v1",
-                            "model": "test-model",
-                            "api_key": "not-allowed",
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self.assertRaises(ConfigError):
-                load_file_config(sensitive_path)
+            persisted = json.loads(config_path.read_text(encoding="utf-8"))
+            second_config = load_nanobot_config(config_path)
+
+        self.assertTrue(first_config.auth.enabled)
+        self.assertEqual(first_config.auth.token, "generated-static-token")
+        self.assertEqual(persisted["auth"]["token"], "generated-static-token")
+        self.assertEqual(second_config.auth.token, "generated-static-token")
+        generate_token.assert_called_once_with(32)
+
+    def test_disabled_auth_does_not_generate_a_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory))
+
+            with patch("nanobot.config.loader.secrets.token_urlsafe") as generate_token:
+                config = load_nanobot_config(config_path)
+
+        self.assertFalse(config.auth.enabled)
+        self.assertEqual(config.auth.token, "")
+        generate_token.assert_not_called()
+
+    def test_rejects_missing_provider_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory), api_key=None)
+
+            with self.assertRaisesRegex(ConfigError, "expected schema"):
+                load_nanobot_config(config_path)
+
+    def test_loads_only_the_selected_channel_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory))
+            raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+            raw_config["channel"] = {
+                "default": "websocket",
+                # This is intentionally incomplete.  It is not the selected
+                # channel, so it must not block a WebSocket-only runtime.
+                "qq": {"app_id": "not-used"},
+                "websocket": {"port": 8101},
+            }
+            config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+
+            config = load_nanobot_config(config_path)
+
+        self.assertIsNone(config.qq)
+        self.assertIsNotNone(config.websocket)
+        self.assertEqual(config.websocket.port if config.websocket else None, 8101)
+
+    def test_rejects_incomplete_selected_qq_json_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = _write_file_config(Path(directory))
+            raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+            raw_config["channel"] = {
+                "default": "qq",
+                "qq": {"app_id": "configured-app-id"},
+            }
+            config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+
+            with self.assertRaisesRegex(ConfigError, "expected schema"):
+                load_nanobot_config(config_path)
 
 
-def _write_file_config(directory: Path) -> Path:
+def _write_file_config(
+    directory: Path,
+    *,
+    api_key: str | None = "test-key",
+) -> Path:
     config_path = directory / "nanobot.json"
+    provider: dict[str, str] = {
+        "type": "openai_compat",
+        "api_base": "https://example.test/v1",
+        "model": "test-model",
+    }
+    if api_key is not None:
+        provider["api_key"] = api_key
+
     config_path.write_text(
         json.dumps(
             {
                 "workspace": "workspace",
-                "provider": {
-                    "type": "openai_compat",
-                    "api_base": "https://example.test/v1",
-                    "model": "test-model",
-                },
+                "provider": provider,
+                "channel": {"default": "websocket"},
             }
         ),
         encoding="utf-8",

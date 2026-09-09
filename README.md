@@ -32,8 +32,10 @@ HTTP API 的 `POST /v1/messages` 为了返回当前请求的响应，会直接�
 
 ## 配置
 
-- `.env` 主要保存敏感配置，例如 `NANOBOT_API_KEY` 和 QQ 凭据；可从 `.env.example` 开始填写。`VITE_NANOBOT_WEBSOCKET_URL` 和 `VITE_NANOBOT_API_URL` 是 Web UI 需要读取的浏览器可见地址，不应填写密钥，分别需与 `channel.websocket` 和 `api` 的 host、port 保持一致。
-- `.nanobot/nanobot.json` 保存非敏感运行配置。`workspace` 是共享根目录；`agent` 包含上下文与压缩预算，`cron` 包含时区，`channel` 包含默认 Channel、QQ/WebSocket 设置及其 `streaming` 开关，`mcp.servers` 保存 MCP Server 列表；Provider、日志和本地 HTTP API 分别位于 `provider`、`logging` 与 `api` 区块。
+- `.env` 仅保存 Web UI 的浏览器可见 `VITE_*` 配置；可从 `.env.example` 开始填写。`VITE_NANOBOT_WEBSOCKET_URL` 和 `VITE_NANOBOT_API_URL` 分别需与 `channel.websocket` 和 `api` 的 host、port 保持一致，认证开启时可额外设置 `VITE_NANOBOT_AUTH_TOKEN`。
+- `.nanobot/nanobot.json` 是本地后端 Agent 的完整配置，包含 Provider API key、QQ 凭据、`workspace`、日志、`agent` 预算、`cron` 时区、`channel`、`mcp.servers` 与本地 HTTP API 设置。新建的本地文件会被 Git 忽略；首次配置可从 `.nanobot/nanobot.example.json` 复制。若旧仓库已跟踪该文件，先执行 `git rm --cached .nanobot/nanobot.json` 再提交，不要提交真实凭据。
+
+  Provider 凭据位于 `provider.api_key`；QQ Channel 使用 `channel.qq.app_id`、`channel.qq.secret` 与 `channel.qq.allow_from`（字符串列表）。启动时只解析、校验并创建 `channel.default` 指向的 Channel：例如默认使用 `websocket` 时，QQ 配置可以尚未填写；切换默认 Channel 前再补全目标 Channel 的配置即可。
 - workspace 是 Agent 可操作与存储运行时数据的范围。Session、长期记忆和记忆事件默认写入 workspace，项目的 `/.nanobot/workspace/` 已被 Git 忽略。
 
 不要把 API key、QQ secret、Session 内容或 workspace 运行时数据提交到仓库。
@@ -108,11 +110,10 @@ npm run dev
 
 ```powershell
 $env:RUN_DEEPSEEK_LIVE_TESTS='0'
-$env:NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS='0'
 python -B -m unittest discover -s tests -t . -p "test*.py"
 ```
 
-真实 Provider 或 QQ 测试默认不应依赖网络或真实凭据；仅在本地明确设置对应环境变量后再运行。
+真实 Provider 或 QQ 测试默认不应依赖网络或真实凭据；QQ live test 仅在进程环境中显式设置 `NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS=1` 后运行，Provider 与 QQ 凭据仍从本地 JSON 配置读取。
 
 Web UI 的协议状态测试与生产构建：
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
@@ -46,12 +46,29 @@ class ApiConfig(BaseModel):
         return value
 
 
+class AuthConfig(BaseModel):
+    """Static local-service authentication settings from ``nanobot.json``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    token: str = ""
+
+    @field_validator("token")
+    @classmethod
+    def _normalize_token(cls, value: str) -> str:
+        """Treat whitespace-only values as an unset token."""
+
+        return value.strip()
+
+
 class ProviderSettingsConfig(BaseModel):
-    """Non-sensitive provider settings stored in ``nanobot.json``."""
+    """Provider settings stored in the local ``nanobot.json`` file."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     type: ProviderType
+    api_key: str = ""
     api_base: str
     default_model: str = Field(
         validation_alias=AliasChoices("model", "default_model"),
@@ -77,7 +94,7 @@ class ProviderSettingsConfig(BaseModel):
 
 
 class ProviderConfig(ProviderSettingsConfig):
-    """Resolved provider configuration, including the API key from ``.env``."""
+    """Resolved provider configuration used by the runtime."""
 
     api_key: str
 
@@ -89,14 +106,6 @@ class ProviderConfig(ProviderSettingsConfig):
         return value
 
 
-class QQChannelSettingsConfig(BaseModel):
-    """Non-sensitive QQ behavior settings stored in ``nanobot.json``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    streaming: bool = False
-
-
 class QQChannelConfig(BaseModel):
     """Credentials and sender allow-list for one QQ channel."""
 
@@ -104,7 +113,6 @@ class QQChannelConfig(BaseModel):
 
     app_id: str
     secret: str
-    enabled: bool = True
     allow_from: list[str] = Field(default_factory=lambda: ["*"])
     streaming: bool = False
 
@@ -179,13 +187,15 @@ class CronConfig(BaseModel):
 
 
 class ChannelConfig(BaseModel):
-    """Channel selection and non-sensitive channel settings."""
+    """Channel selection and local channel configuration."""
 
     model_config = ConfigDict(extra="forbid")
 
     default: str = "qq"
-    qq: QQChannelSettingsConfig = Field(default_factory=QQChannelSettingsConfig)
-    websocket: WebSocketChannelConfig = Field(default_factory=WebSocketChannelConfig)
+    # Keep non-selected channel sections opaque.  Their credentials may be
+    # intentionally absent until that channel becomes the configured default.
+    qq: Any = None
+    websocket: Any = None
 
     @field_validator("default")
     @classmethod
@@ -193,6 +203,25 @@ class ChannelConfig(BaseModel):
         if not value.strip():
             raise ValueError("must not be blank")
         return value
+
+    @model_validator(mode="after")
+    def _validate_selected_channel(self) -> ChannelConfig:
+        """Validate only the channel that the runtime will create."""
+
+        self.default_config()
+        return self
+
+    def default_config(self) -> QQChannelConfig | WebSocketChannelConfig:
+        """Return the parsed configuration for the selected default channel."""
+
+        if self.default == "qq":
+            if self.qq is None:
+                raise ValueError("The qq default channel requires a qq configuration")
+            return QQChannelConfig.model_validate(self.qq)
+        if self.default == "websocket":
+            raw_config = {} if self.websocket is None else self.websocket
+            return WebSocketChannelConfig.model_validate(raw_config)
+        raise ValueError(f"Unsupported default channel: {self.default}")
 
 
 class MCPServerConfig(BaseModel):
@@ -257,7 +286,7 @@ class MCPConfig(BaseModel):
 
 
 class NanobotFileConfig(BaseModel):
-    """Non-sensitive configuration loaded from ``.nanobot/nanobot.json``."""
+    """Configuration loaded from ``.nanobot/nanobot.json``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -266,6 +295,7 @@ class NanobotFileConfig(BaseModel):
     cron: CronConfig = Field(default_factory=CronConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     provider: ProviderSettingsConfig
     channel: ChannelConfig = Field(default_factory=ChannelConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
@@ -283,8 +313,9 @@ class NanobotConfig(BaseModel):
     compaction_recent_tokens: int = Field(default=32_000, ge=0)
     cron_timezone: str = "Asia/Shanghai"
     api: ApiConfig = Field(default_factory=ApiConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     default_channel: str = "qq"
-    websocket: WebSocketChannelConfig = Field(default_factory=WebSocketChannelConfig)
+    websocket: WebSocketChannelConfig | None = None
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     qq: QQChannelConfig | None = None
 

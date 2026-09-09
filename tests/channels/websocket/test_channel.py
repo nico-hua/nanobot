@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
@@ -13,7 +14,7 @@ from aiohttp import ClientSession, ClientWebSocketResponse, WSMsgType
 from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
 from nanobot.channels import ChannelManager, WebSocketChannel
-from nanobot.config import WebSocketChannelConfig
+from nanobot.config import AuthConfig, WebSocketChannelConfig
 from nanobot.providers import BaseMessage, LLMProvider, LLMResponse
 from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolRegistry
@@ -87,6 +88,75 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
                 "content": "Hello",
             }
         )
+
+        self.assertEqual(
+            await asyncio.wait_for(bus.consume_inbound(), timeout=1),
+            InboundMessage(
+                channel="websocket",
+                chat_id="chat-1",
+                sender_id="websocket",
+                session_id="session-1",
+                content="Hello",
+                metadata={"streaming": True},
+            ),
+        )
+
+    async def test_enabled_auth_requires_authentication_before_a_chat_message(self) -> None:
+        bus = MessageBus()
+        channel = await self._start_channel(
+            bus,
+            auth=AuthConfig(enabled=True, token="test-static-token"),
+        )
+        socket = await self._connect(channel)
+
+        self.assertEqual(
+            await socket.receive_json(timeout=1),
+            {"type": "ready", "authentication_required": True},
+        )
+        await self._send_client_message(socket, "chat-1", "session-1", "Hello")
+
+        self.assertEqual(
+            await socket.receive_json(timeout=1),
+            {
+                "type": "error",
+                "code": "authentication_required",
+                "message": "Authentication is required before sending messages",
+            },
+        )
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(bus.consume_inbound(), timeout=0.05)
+
+    async def test_enabled_auth_rejects_invalid_token_without_exposing_it(self) -> None:
+        token = "test-static-token"
+        bus = MessageBus()
+        channel = await self._start_channel(
+            bus,
+            auth=AuthConfig(enabled=True, token=token),
+        )
+        socket = await self._connect(channel)
+        await socket.receive_json(timeout=1)
+
+        await socket.send_json({"type": "authenticate", "token": "wrong-token"})
+        error = await socket.receive_json(timeout=1)
+
+        self.assertEqual(error["type"], "error")
+        self.assertEqual(error["code"], "authentication_failed")
+        self.assertNotIn(token, json.dumps(error))
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(bus.consume_inbound(), timeout=0.05)
+
+    async def test_enabled_auth_allows_messages_after_a_valid_first_event(self) -> None:
+        bus = MessageBus()
+        channel = await self._start_channel(
+            bus,
+            auth=AuthConfig(enabled=True, token="test-static-token"),
+        )
+        socket = await self._connect(channel)
+        await socket.receive_json(timeout=1)
+
+        await socket.send_json({"type": "authenticate", "token": "test-static-token"})
+        self.assertEqual(await socket.receive_json(timeout=1), {"type": "authenticated"})
+        await self._send_client_message(socket, "chat-1", "session-1", "Hello")
 
         self.assertEqual(
             await asyncio.wait_for(bus.consume_inbound(), timeout=1),
@@ -382,11 +452,17 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
                 await worker
             await manager.stop_all()
 
-    async def _start_channel(self, bus: MessageBus) -> WebSocketChannel:
+    async def _start_channel(
+        self,
+        bus: MessageBus,
+        *,
+        auth: AuthConfig | None = None,
+    ) -> WebSocketChannel:
         channel = WebSocketChannel(
             "websocket",
             bus,
             WebSocketChannelConfig(host="127.0.0.1", port=0),
+            auth,
         )
         await channel.start()
         self._channels.append(channel)

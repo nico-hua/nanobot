@@ -14,8 +14,16 @@ export type ConnectionStatus =
   | "disconnected"
   | "error";
 
+export type AuthenticationStatus =
+  | "checking"
+  | "not_required"
+  | "authenticating"
+  | "authenticated"
+  | "failed";
+
 export type ChatState = {
   connectionStatus: ConnectionStatus;
+  authenticationStatus: AuthenticationStatus;
   error: string | null;
   isSending: boolean;
   isStopping: boolean;
@@ -27,6 +35,7 @@ export type ChatState = {
 export function createInitialChatState(): ChatState {
   return {
     connectionStatus: "connecting",
+    authenticationStatus: "checking",
     error: null,
     isSending: false,
     isStopping: false,
@@ -73,6 +82,7 @@ export function beginConnection(state: ChatState): ChatState {
   return {
     ...state,
     connectionStatus: "connecting",
+    authenticationStatus: "checking",
     error: null,
   };
 }
@@ -81,6 +91,7 @@ export function markConnected(state: ChatState): ChatState {
   return {
     ...state,
     connectionStatus: "connected",
+    authenticationStatus: "checking",
     error: null,
   };
 }
@@ -92,6 +103,40 @@ export function markDisconnected(state: ChatState): ChatState {
     "disconnected",
     "The Nanobot WebSocket connection was closed.",
   );
+}
+
+export function beginAuthentication(state: ChatState): ChatState {
+  return {
+    ...state,
+    authenticationStatus: "authenticating",
+    error: null,
+  };
+}
+
+export function markAuthenticationNotRequired(state: ChatState): ChatState {
+  return {
+    ...state,
+    authenticationStatus: "not_required",
+    error: null,
+  };
+}
+
+export function markAuthenticated(state: ChatState): ChatState {
+  return {
+    ...state,
+    authenticationStatus: "authenticated",
+    error: null,
+  };
+}
+
+export function markAuthenticationFailed(
+  state: ChatState,
+  error: string,
+): ChatState {
+  return {
+    ...withAssistantFinished(state, null, "error", error),
+    authenticationStatus: "failed",
+  };
 }
 
 /**
@@ -160,7 +205,11 @@ export function beginStopRequest(state: ChatState): ChatState {
 export function applyServerEvent(state: ChatState, event: ServerEvent): ChatState {
   switch (event.type) {
     case "ready":
-      return markConnected(state);
+      return event.authentication_required
+        ? beginAuthentication(markConnected(state))
+        : markAuthenticationNotRequired(markConnected(state));
+    case "authenticated":
+      return markAuthenticated(state);
     case "error":
       return markServerError(
         state,

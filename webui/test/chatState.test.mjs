@@ -9,6 +9,7 @@ import {
   beginStopRequest,
   beginUserMessage,
   createInitialChatState,
+  markAuthenticationFailed,
   markConnected,
   markConnectionError,
   markDisconnected,
@@ -22,6 +23,7 @@ import {
 } from "../.test-build/hooks/webSocketConnection.js";
 import {
   createWebSocketClientMessage,
+  createWebSocketAuthenticationMessage,
   createWebSocketStopMessage,
   isEventForSession,
   parseServerEvent,
@@ -57,7 +59,7 @@ test("slash command suggestions list, filter, and preserve argument placeholders
     getSlashCommandSuggestions("/goal st").map(
       (suggestion) => suggestion.usage,
     ),
-    ["/goal status"],
+    ["/goal status", "/goal stop"],
   );
   assert.equal(getSlashCommandSuggestions("ordinary text").length, 0);
 
@@ -278,7 +280,21 @@ test("the stop request reuses the existing slash-command WebSocket protocol", ()
   });
 });
 
+test("the authentication request uses a separate first WebSocket event", () => {
+  assert.deepEqual(createWebSocketAuthenticationMessage("browser-token"), {
+    type: "authenticate",
+    token: "browser-token",
+  });
+});
+
 test("the protocol parser accepts only the existing server event contract", () => {
+  assert.deepEqual(
+    parseServerEvent({ type: "ready", authentication_required: true }),
+    { type: "ready", authentication_required: true },
+  );
+  assert.deepEqual(parseServerEvent({ type: "authenticated" }), {
+    type: "authenticated",
+  });
   assert.deepEqual(
     parseServerEvent({
       type: "turn_end",
@@ -321,6 +337,30 @@ test("the protocol parser accepts only the existing server event contract", () =
       },
     },
   );
+});
+
+test("authentication state blocks sending until it succeeds or is not required", () => {
+  let state = markConnected(createInitialChatState());
+  assert.equal(state.authenticationStatus, "checking");
+
+  state = applyServerEvent(state, {
+    type: "ready",
+    authentication_required: true,
+  });
+  assert.equal(state.authenticationStatus, "authenticating");
+
+  state = applyServerEvent(state, { type: "authenticated" });
+  assert.equal(state.authenticationStatus, "authenticated");
+
+  state = markAuthenticationFailed(state, "Authentication failed.");
+  assert.equal(state.authenticationStatus, "failed");
+  assert.equal(state.connectionStatus, "error");
+  assert.equal(state.error, "Authentication failed.");
+
+  state = applyServerEvent(markConnected(createInitialChatState()), {
+    type: "ready",
+  });
+  assert.equal(state.authenticationStatus, "not_required");
 });
 
 test("saved-session history replaces visible chat state without mixing sessions", () => {
@@ -384,8 +424,11 @@ test("late stream events from an unselected session are ignored", () => {
 test("the session API loads summaries and a selected transcript", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
-  globalThis.fetch = async (url) => {
-    requests.push(String(url));
+  globalThis.fetch = async (url, options) => {
+    requests.push({
+      url: String(url),
+      authorization: new Headers(options?.headers).get("Authorization"),
+    });
     if (String(url).endsWith("/v1/sessions")) {
       return new Response(
         JSON.stringify({
@@ -415,10 +458,14 @@ test("the session API loads summaries and a selected transcript", async () => {
   };
 
   try {
-    const summaries = await fetchSessionSummaries("http://127.0.0.1:8000/");
+    const summaries = await fetchSessionSummaries(
+      "http://127.0.0.1:8000/",
+      "browser-token",
+    );
     const history = await fetchSessionHistory(
       "http://127.0.0.1:8000",
       "session two",
+      "browser-token",
     );
 
     assert.deepEqual(summaries, [
@@ -434,8 +481,14 @@ test("the session API loads summaries and a selected transcript", async () => {
       { role: "assistant", content: "Hi", toolCalls: [] },
     ]);
     assert.deepEqual(requests, [
-      "http://127.0.0.1:8000/v1/sessions",
-      "http://127.0.0.1:8000/v1/sessions/session%20two",
+      {
+        url: "http://127.0.0.1:8000/v1/sessions",
+        authorization: "Bearer browser-token",
+      },
+      {
+        url: "http://127.0.0.1:8000/v1/sessions/session%20two",
+        authorization: "Bearer browser-token",
+      },
     ]);
   } finally {
     globalThis.fetch = originalFetch;

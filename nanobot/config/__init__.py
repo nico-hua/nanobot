@@ -2,15 +2,14 @@
 
 from .loader import (
     DEFAULT_CONFIG_PATH,
-    DEFAULT_ENV_PATH,
     ConfigError,
-    get_env_value,
     load_file_config,
     load_nanobot_config,
 )
 from .schema import (
     AgentConfig,
     ApiConfig,
+    AuthConfig,
     ChannelConfig,
     CronConfig,
     LoggingConfig,
@@ -22,15 +21,14 @@ from .schema import (
     ProviderConfig,
     ProviderSettingsConfig,
     QQChannelConfig,
-    QQChannelSettingsConfig,
     WebSocketChannelConfig,
 )
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
-    "DEFAULT_ENV_PATH",
     "AgentConfig",
     "ApiConfig",
+    "AuthConfig",
     "ChannelConfig",
     "ConfigError",
     "CronConfig",
@@ -43,9 +41,7 @@ __all__ = [
     "ProviderConfig",
     "ProviderSettingsConfig",
     "QQChannelConfig",
-    "QQChannelSettingsConfig",
     "WebSocketChannelConfig",
-    "get_env_value",
     "load_file_config",
     "load_nanobot_config",
 ]

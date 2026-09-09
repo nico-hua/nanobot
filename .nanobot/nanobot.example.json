@@ -1,0 +1,51 @@
+{
+  "workspace": "workspace",
+  "agent": {
+    "context_window_tokens": 128000,
+    "compaction_threshold_tokens": 64000,
+    "compaction_recent_tokens": 16000
+  },
+  "cron": {
+    "timezone": "Asia/Shanghai"
+  },
+  "logging": {
+    "level": "INFO"
+  },
+  "api": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8000,
+    "request_timeout_seconds": 60
+  },
+  "auth": {
+    "enabled": false,
+    "token": ""
+  },
+  "provider": {
+    "type": "openai_compat",
+    "api_key": "",
+    "api_base": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "max_tokens": 2048,
+    "temperature": 0.7
+  },
+  "channel": {
+    "default": "websocket",
+    "qq": {
+      "app_id": "",
+      "secret": "",
+      "allow_from": [
+        "*"
+      ],
+      "streaming": false
+    },
+    "websocket": {
+      "host": "127.0.0.1",
+      "port": 8765,
+      "streaming": true
+    }
+  },
+  "mcp": {
+    "servers": {}
+  }
+}

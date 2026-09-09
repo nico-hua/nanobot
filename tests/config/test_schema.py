@@ -6,9 +6,9 @@ from pydantic import ValidationError
 
 from nanobot.config import (
     ApiConfig,
+    AuthConfig,
     MCPServerConfig,
     QQChannelConfig,
-    QQChannelSettingsConfig,
     WebSocketChannelConfig,
 )
 from nanobot.config.schema import NanobotConfig, NanobotFileConfig, ProviderConfig
@@ -64,9 +64,6 @@ class QQChannelConfigTest(unittest.TestCase):
         self.assertEqual(config.allow_from, ["*"])
         self.assertFalse(config.streaming)
         self.assertTrue(config.allows_sender("user-1"))
-
-    def test_non_sensitive_qq_settings_default_to_non_streaming(self) -> None:
-        self.assertFalse(QQChannelSettingsConfig().streaming)
 
     def test_filters_senders_and_rejects_invalid_values(self) -> None:
         config = QQChannelConfig(
@@ -126,6 +123,17 @@ class ApiConfigTest(unittest.TestCase):
                 ApiConfig(**values)
 
 
+class AuthConfigTest(unittest.TestCase):
+    def test_defaults_to_disabled_with_no_token(self) -> None:
+        config = AuthConfig()
+
+        self.assertFalse(config.enabled)
+        self.assertEqual(config.token, "")
+
+    def test_normalizes_a_whitespace_only_token(self) -> None:
+        self.assertEqual(AuthConfig(enabled=True, token="  ").token, "")
+
+
 class WebSocketChannelConfigTest(unittest.TestCase):
     def test_defaults_to_a_local_listener(self) -> None:
         config = WebSocketChannelConfig()
@@ -161,7 +169,8 @@ class NanobotConfigTest(unittest.TestCase):
         self.assertEqual(config.compaction_recent_tokens, 32_000)
         self.assertEqual(config.cron_timezone, "Asia/Shanghai")
         self.assertFalse(config.api.enabled)
-        self.assertEqual(config.websocket.host, "127.0.0.1")
+        self.assertFalse(config.auth.enabled)
+        self.assertIsNone(config.websocket)
 
     def test_rejects_an_invalid_cron_timezone(self) -> None:
         with self.assertRaises(ValidationError):
@@ -213,12 +222,16 @@ class NanobotFileConfigTest(unittest.TestCase):
             cron={"timezone": "UTC"},
             provider={
                 "type": "openai_compat",
+                "api_key": "test-key",
                 "api_base": "https://example.test/v1",
                 "model": "test-model",
             },
             channel={
                 "default": "websocket",
-                "qq": {"streaming": True},
+                # Non-selected Channel entries are deliberately not parsed.
+                "qq": {
+                    "app_id": "incomplete-but-not-selected",
+                },
                 "websocket": {"port": 8101},
             },
             mcp={"servers": {"local": {"command": "python"}}},
@@ -227,6 +240,29 @@ class NanobotFileConfigTest(unittest.TestCase):
         self.assertEqual(config.agent.context_window_tokens, 512)
         self.assertEqual(config.cron.timezone, "UTC")
         self.assertEqual(config.channel.default, "websocket")
-        self.assertTrue(config.channel.qq.streaming)
-        self.assertEqual(config.channel.websocket.port, 8101)
+        default_channel = config.channel.default_config()
+        self.assertIsInstance(default_channel, WebSocketChannelConfig)
+        self.assertEqual(default_channel.port, 8101)
         self.assertIn("local", config.mcp.servers)
+
+    def test_validates_only_the_selected_channel_configuration(self) -> None:
+        config = NanobotFileConfig(
+            workspace="workspace",
+            provider={
+                "type": "openai_compat",
+                "api_key": "test-key",
+                "api_base": "https://example.test/v1",
+                "model": "test-model",
+            },
+            channel={
+                "default": "qq",
+                "qq": {"app_id": "app", "secret": "secret"},
+                # This would be invalid if WebSocket were selected.
+                "websocket": {"host": ""},
+            },
+        )
+
+        default_channel = config.channel.default_config()
+
+        self.assertIsInstance(default_channel, QQChannelConfig)
+        self.assertEqual(default_channel.app_id, "app")

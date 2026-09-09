@@ -17,6 +17,7 @@ import { CommandSuggestionPanel } from "./components/CommandSuggestionPanel";
 import { MessageContent } from "./components/MessageContent";
 import { isNearConversationBottom } from "./conversationScroll";
 import {
+  type AuthenticationStatus,
   type ConnectionStatus,
   useNanobotWebSocket,
 } from "./hooks/useNanobotWebSocket";
@@ -26,6 +27,7 @@ import "./App.css";
 const CHAT_ID = "webui-default-chat";
 const API_BASE_URL =
   import.meta.env.VITE_NANOBOT_API_URL ?? "http://127.0.0.1:8000";
+const AUTH_TOKEN = import.meta.env.VITE_NANOBOT_AUTH_TOKEN;
 
 const STATUS_LABELS: Record<ConnectionStatus, string> = {
   connecting: "Connecting",
@@ -33,6 +35,14 @@ const STATUS_LABELS: Record<ConnectionStatus, string> = {
   reconnecting: "Reconnecting",
   disconnected: "Disconnected",
   error: "Connection error",
+};
+
+const AUTHENTICATION_STATUS_LABELS: Record<AuthenticationStatus, string> = {
+  checking: "Authenticating",
+  not_required: "Connected",
+  authenticating: "Authenticating",
+  authenticated: "Authenticated",
+  failed: "Authentication failed",
 };
 
 function App() {
@@ -52,6 +62,7 @@ function App() {
   activeSessionIdRef.current = sessionId;
   const {
     connectionStatus,
+    authenticationStatus,
     connectionVersion,
     error,
     isSending,
@@ -65,11 +76,12 @@ function App() {
     url: import.meta.env.VITE_NANOBOT_WEBSOCKET_URL,
     chatId: CHAT_ID,
     sessionId,
+    authToken: AUTH_TOKEN,
   });
 
   const refreshSessions = useCallback(async () => {
     try {
-      const summaries = await fetchSessionSummaries(API_BASE_URL);
+      const summaries = await fetchSessionSummaries(API_BASE_URL, AUTH_TOKEN);
       setSessions(summaries);
       setSessionError(null);
     } catch (caughtError) {
@@ -88,7 +100,7 @@ function App() {
     historyRequestRef.current = requestId;
     setIsLoadingHistory(true);
 
-    void fetchSessionHistory(API_BASE_URL, targetSessionId)
+    void fetchSessionHistory(API_BASE_URL, targetSessionId, AUTH_TOKEN)
       .then((history) => {
         if (historyRequestRef.current !== requestId) {
           return;
@@ -144,14 +156,21 @@ function App() {
     wasSendingRef.current = isSending;
   }, [isSending, refreshSessions]);
 
+  const authenticationReady =
+    authenticationStatus === "not_required" ||
+    authenticationStatus === "authenticated";
   const canSend = Boolean(
     connectionStatus === "connected" &&
+      authenticationReady &&
       !isSending &&
       !isLoadingHistory &&
       draft.trim(),
   );
   const isComposerDisabled =
-    isSending || isLoadingHistory || connectionStatus !== "connected";
+    isSending ||
+    isLoadingHistory ||
+    connectionStatus !== "connected" ||
+    !authenticationReady;
   const commandSuggestions = getSlashCommandSuggestions(draft);
 
   useEffect(() => {
@@ -208,6 +227,17 @@ function App() {
     setDraft(insertText);
     draftInputRef.current?.focus();
   }
+
+  const connectionLabel =
+    connectionStatus === "connected"
+      ? AUTHENTICATION_STATUS_LABELS[authenticationStatus]
+      : STATUS_LABELS[connectionStatus];
+  const connectionClass =
+    connectionStatus === "connected"
+      ? authenticationStatus === "authenticated"
+        ? "authenticated"
+        : authenticationStatus
+      : connectionStatus;
 
   return (
     <main className="app-shell" aria-label="Nanobot chat">
@@ -279,8 +309,8 @@ function App() {
             <div className="chat-panel__header">
               <h2 id="conversation-title">Conversation</h2>
               <div className="chat-panel__connection">
-                <span className={`status-badge status-badge--${connectionStatus}`}>
-                  {STATUS_LABELS[connectionStatus]}
+                <span className={`status-badge status-badge--${connectionClass}`}>
+                  {connectionLabel}
                 </span>
                 {connectionStatus === "error" ||
                 connectionStatus === "disconnected" ? (

@@ -20,8 +20,9 @@ export class SessionApiError extends Error {
 /** Fetch persisted chat summaries through Nanobot's read-only HTTP API. */
 export async function fetchSessionSummaries(
   apiBaseUrl: string,
+  authToken?: string,
 ): Promise<SessionInfo[]> {
-  const payload = await requestJson(apiBaseUrl, "/v1/sessions");
+  const payload = await requestJson(apiBaseUrl, "/v1/sessions", authToken);
   if (!isRecord(payload) || !Array.isArray(payload.sessions)) {
     throw invalidResponse();
   }
@@ -33,10 +34,12 @@ export async function fetchSessionSummaries(
 export async function fetchSessionHistory(
   apiBaseUrl: string,
   sessionId: string,
+  authToken?: string,
 ): Promise<SessionHistory> {
   const payload = await requestJson(
     apiBaseUrl,
     `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    authToken,
   );
   if (!isRecord(payload) || !Array.isArray(payload.messages)) {
     throw invalidResponse();
@@ -58,10 +61,16 @@ export function createSessionId(
   return `webui-${createUuid()}`;
 }
 
-async function requestJson(apiBaseUrl: string, path: string): Promise<unknown> {
+async function requestJson(
+  apiBaseUrl: string,
+  path: string,
+  authToken?: string,
+): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}${path}`);
+    response = await fetch(`${apiBaseUrl.replace(/\/+$/, "")}${path}`, {
+      headers: authorizationHeader(authToken),
+    });
   } catch {
     throw new SessionApiError(
       0,
@@ -83,6 +92,11 @@ async function requestJson(apiBaseUrl: string, path: string): Promise<unknown> {
     throw new SessionApiError(response.status, errorMessage(payload));
   }
   return payload;
+}
+
+function authorizationHeader(token: string | undefined): HeadersInit {
+  const value = token?.trim();
+  return value ? { Authorization: `Bearer ${value}` } : {};
 }
 
 function parseSessionSummary(value: unknown): SessionInfo {

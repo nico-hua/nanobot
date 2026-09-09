@@ -15,7 +15,7 @@
 
 ### 2026-08-28
 
-- [x] 完成配置分层：非敏感运行配置位于 `.nanobot/nanobot.json`，敏感凭据位于本地 `.env`。配置包含 workspace、日志级别、Provider、默认 Channel 与 MCP Server；Provider API key 不允许写入 JSON。
+- [x] 完成配置分层：本地 `.nanobot/nanobot.json` 统一保存后端 Agent 配置，包括 Provider API key 与 QQ 凭据；根目录 `.env` 仅保留 Web UI 的 `VITE_*` 浏览器配置。真实配置文件已被 Git 忽略，仓库提供 `.nanobot/nanobot.example.json`；启动时仅解析和校验 `channel.default` 选中的 Channel 配置，未选中 Channel 可保留未完成配置。
 - [x] 实现 `Application` 与 `python -m nanobot` CLI：组装共享 `MessageBus`、Provider、工具、MCP、`AgentLoop` 与默认 Channel；处理 SIGINT/SIGTERM、后台任务监督、启动失败清理和幂等关闭。
 - [x] 建立 `MessageBus`、`BaseChannel`、`FakeChannel`、`ChannelManager` 和 QQ 文本 Channel。QQ 支持 C2C 与群聊 @ 消息、原生 Markdown 输出、`allow_from` 白名单，qq-botpy 文件日志默认关闭。
 - [x] 建立统一日志规范与初始化流程：CLI/宿主初始化包级日志，运行时模块使用模块级 logger，不记录消息内容、工具参数、文件内容或凭据；关键异常边界保留 traceback，取消信号继续传播。

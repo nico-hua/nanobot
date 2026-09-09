@@ -49,9 +49,7 @@ class ChannelFactoryTest(unittest.TestCase):
 
     def test_default_factory_registers_websocket_channel(self) -> None:
         bus = MessageBus()
-        config = _config(default_channel="websocket").model_copy(
-            update={"websocket": WebSocketChannelConfig(port=8765)}
-        )
+        config = _config(default_channel="websocket")
 
         channel = create_default_channel_factory().create("websocket", bus, config)
 
@@ -79,6 +77,15 @@ class ChannelFactoryTest(unittest.TestCase):
 
 
 def _config(default_channel: str = "qq") -> NanobotConfig:
+    channel_settings: dict[str, QQChannelConfig | WebSocketChannelConfig] = {}
+    if default_channel == "qq":
+        channel_settings["qq"] = QQChannelConfig(
+            app_id="test-app-id",
+            secret="test-secret",
+        )
+    elif default_channel == "websocket":
+        channel_settings["websocket"] = WebSocketChannelConfig(port=8765)
+
     return NanobotConfig(
         provider=ProviderConfig(
             type="openai_compat",
@@ -88,5 +95,5 @@ def _config(default_channel: str = "qq") -> NanobotConfig:
         ),
         workspace=Path("workspace"),
         default_channel=default_channel,
-        qq=QQChannelConfig(app_id="test-app-id", secret="test-secret"),
+        **channel_settings,
     )

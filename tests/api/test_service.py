@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from collections.abc import Awaitable, Callable, Sequence
@@ -13,7 +14,7 @@ from aiohttp import ClientSession
 from nanobot.agent import AgentLoop, AgentRunner, ContextBuilder
 from nanobot.api import HttpApiService
 from nanobot.bus import InboundMessage, MessageBus, OutboundMessage
-from nanobot.config import ApiConfig
+from nanobot.config import ApiConfig, AuthConfig
 from nanobot.providers import (
     AIMessage,
     BaseMessage,
@@ -144,6 +145,60 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
+
+    async def test_static_auth_rejects_missing_or_invalid_http_credentials(self) -> None:
+        token = "test-static-token"
+        loop = RecordingLoop()
+        service = await self._start_service(
+            loop,
+            auth=AuthConfig(enabled=True, token=token),
+        )
+
+        with self.assertNoLogs("nanobot.api.service", level="DEBUG"):
+            missing_status, missing_payload = await _http_request(
+                service,
+                "POST",
+                "/v1/messages",
+                {"session_id": "session-1", "content": "Hello"},
+            )
+            invalid_status, invalid_payload = await _http_request(
+                service,
+                "POST",
+                "/v1/messages",
+                {"session_id": "session-1", "content": "Hello"},
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+
+        self.assertEqual(missing_status, 401)
+        self.assertEqual(invalid_status, 401)
+        self.assertEqual(missing_payload["error"]["code"], "unauthorized")
+        self.assertEqual(invalid_payload["error"]["code"], "unauthorized")
+        self.assertNotIn(token, json.dumps(missing_payload))
+        self.assertNotIn(token, json.dumps(invalid_payload))
+        self.assertEqual(loop.received, [])
+
+    async def test_static_auth_allows_valid_http_credentials_and_health(self) -> None:
+        token = "test-static-token"
+        loop = RecordingLoop()
+        service = await self._start_service(
+            loop,
+            auth=AuthConfig(enabled=True, token=token),
+        )
+
+        health_status, health_payload = await _http_request(service, "GET", "/health")
+        status, payload = await _http_request(
+            service,
+            "POST",
+            "/v1/messages",
+            {"session_id": "session-1", "content": "Hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(health_status, 200)
+        self.assertEqual(health_payload, {"status": "ok"})
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["content"], "Recorded response")
+        self.assertEqual(len(loop.received), 1)
 
     async def test_normal_request_uses_agent_loop_and_persists_its_session(self) -> None:
         provider = EchoProvider()
@@ -423,6 +478,20 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
                     "http://localhost:5173",
                 )
 
+            async with client.options(
+                f"http://127.0.0.1:{port}/v1/sessions",
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "Authorization",
+                },
+            ) as response:
+                self.assertEqual(response.status, 204)
+                self.assertIn(
+                    "Authorization",
+                    response.headers["Access-Control-Allow-Headers"],
+                )
+
     async def test_router_returns_a_json_error_for_an_unsupported_method(self) -> None:
         service = await self._start_service(RecordingLoop())
 
@@ -435,6 +504,7 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
         self,
         loop: AgentLoop | RecordingLoop,
         sessions: SessionManager | None = None,
+        auth: AuthConfig | None = None,
     ) -> HttpApiService:
         service = HttpApiService(
             loop,
@@ -446,6 +516,7 @@ class HttpApiServiceTest(unittest.IsolatedAsyncioTestCase):
                 port=0,
                 request_timeout_seconds=1,
             ),
+            auth,
         )
         await service.start()
         self._services.append(service)
@@ -475,11 +546,14 @@ async def _http_request(
     method: str,
     path: str,
     payload: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, object]]:
     port = service.port
     if port is None:
         raise AssertionError("HTTP API service has no bound port")
     request_kwargs = {} if payload is None else {"json": payload}
+    if headers is not None:
+        request_kwargs["headers"] = headers
     async with ClientSession() as client:
         async with client.request(
             method,

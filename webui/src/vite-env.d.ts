@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_NANOBOT_API_URL?: string;
+  readonly VITE_NANOBOT_AUTH_TOKEN?: string;
   readonly VITE_NANOBOT_WEBSOCKET_URL?: string;
 }
 

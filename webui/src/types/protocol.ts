@@ -49,7 +49,7 @@ export type SessionHistory = Pick<SessionInfo, "sessionId" | "updatedAt"> & {
   messages: PersistedSessionMessage[];
 };
 
-/** Existing client-to-server WebSocket message format. */
+/** Existing client-to-server chat event format. */
 export type WebSocketClientMessage = {
   type: "message";
   chat_id: string;
@@ -57,10 +57,25 @@ export type WebSocketClientMessage = {
   content: string;
 };
 
+/** One-time first WebSocket event when the local service enables auth. */
+export type WebSocketAuthenticationMessage = {
+  type: "authenticate";
+  token: string;
+};
+
+export type WebSocketClientEvent =
+  | WebSocketClientMessage
+  | WebSocketAuthenticationMessage;
+
 const STOP_COMMAND = "/stop";
 
 export type ReadyEvent = {
   type: "ready";
+  authentication_required?: boolean;
+};
+
+export type AuthenticatedEvent = {
+  type: "authenticated";
 };
 
 type RoutedEvent = {
@@ -98,6 +113,7 @@ export type ServerErrorEvent = {
 
 export type ServerEvent =
   | ReadyEvent
+  | AuthenticatedEvent
   | DeltaEvent
   | ToolCallEvent
   | TurnEndEvent
@@ -117,6 +133,12 @@ export function createWebSocketClientMessage(
   };
 }
 
+export function createWebSocketAuthenticationMessage(
+  token: string,
+): WebSocketAuthenticationMessage {
+  return { type: "authenticate", token };
+}
+
 /** Reuse the existing slash-command protocol for an in-flight turn stop. */
 export function createWebSocketStopMessage(
   chatId: string,
@@ -132,7 +154,21 @@ export function parseServerEvent(value: unknown): ServerEvent | null {
   }
 
   if (value.type === "ready") {
-    return { type: "ready" };
+    if (
+      value.authentication_required !== undefined &&
+      typeof value.authentication_required !== "boolean"
+    ) {
+      return null;
+    }
+    return value.authentication_required === undefined
+      ? { type: "ready" }
+      : {
+          type: "ready",
+          authentication_required: value.authentication_required,
+        };
+  }
+  if (value.type === "authenticated") {
+    return { type: "authenticated" };
   }
   if (value.type === "error") {
     return typeof value.code === "string" && typeof value.message === "string"
@@ -174,6 +210,7 @@ export function isEventForSession(event: ServerEvent, sessionId: string): boolea
       return event.session_id === sessionId;
     case "error":
     case "ready":
+    case "authenticated":
       return true;
   }
 }

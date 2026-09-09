@@ -59,7 +59,7 @@ def _create_qq_channel(
     config: NanobotConfig,
 ) -> BaseChannel:
     if config.qq is None:
-        raise ValueError("The qq channel requires QQ credentials in .env")
+        raise ValueError("The qq channel requires QQ credentials in nanobot.json")
     return QQChannel(channel_name, message_bus, config.qq)
 
 
@@ -68,4 +68,6 @@ def _create_websocket_channel(
     message_bus: MessageBus,
     config: NanobotConfig,
 ) -> BaseChannel:
-    return WebSocketChannel(channel_name, message_bus, config.websocket)
+    if config.websocket is None:
+        raise ValueError("The websocket channel requires WebSocket settings in nanobot.json")
+    return WebSocketChannel(channel_name, message_bus, config.websocket, config.auth)

@@ -241,19 +241,23 @@
   white-space: nowrap;
 }
 
-.status-badge--connected {
+.status-badge--connected,
+.status-badge--authenticated {
   color: #0d6b5b;
   background: #dcefe7;
 }
 
 .status-badge--connecting,
-.status-badge--reconnecting {
+.status-badge--reconnecting,
+.status-badge--checking,
+.status-badge--authenticating {
   color: #8a5c00;
   background: #fff2d8;
 }
 
 .status-badge--disconnected,
-.status-badge--error {
+.status-badge--error,
+.status-badge--failed {
   color: #9c2f20;
   background: #fbe3df;
 }

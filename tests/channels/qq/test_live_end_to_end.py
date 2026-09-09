@@ -1,19 +1,13 @@
 """Manual live test for the QQ -> Agent -> DeepSeek -> tool -> QQ flow.
 
 This test is skipped by default because it opens a real QQ bot connection and
-calls DeepSeek. To run it, set these environment variables before invoking
-unittest:
+calls DeepSeek. To run it, set this process environment variable before
+invoking unittest:
 
 * ``NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS=1``
-* ``NANOBOT_QQ_APP_ID``
-* ``NANOBOT_QQ_SECRET``
-* ``NANOBOT_API_KEY``
-* a valid ``.nanobot/nanobot.json`` with an ``openai_compat`` provider
 
-Optional variables:
-
-* ``NANOBOT_QQ_ALLOW_FROM``: comma-separated QQ user openids; defaults to ``*``
-* ``NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS``: defaults to ``180``
+The local ``.nanobot/nanobot.json`` must contain the Provider API key and QQ
+channel credentials. The test uses a fixed 180-second timeout.
 
 After the test starts, send the QQ bot this message through C2C or a group
 @ mention: ``请使用 get_weather 工具查询北京天气，并简短回复。`` The test waits
@@ -24,8 +18,8 @@ background tasks and the QQ client.
 from __future__ import annotations
 
 import asyncio
+import os
 import unittest
-from collections.abc import Sequence
 from contextlib import suppress
 from typing import Any
 
@@ -35,21 +29,14 @@ from nanobot.channels import ChannelManager
 from nanobot.channels.qq import QQChannel
 from nanobot.config import (
     ConfigError,
-    QQChannelConfig,
-    get_env_value,
     load_nanobot_config,
 )
 from nanobot.providers import OpenAICompatProvider, ToolMessage
 from nanobot.session import SessionManager
 from nanobot.tools import Tool, ToolParameter, ToolRegistry, ToolResult
 
-_RUN_LIVE_TESTS = get_env_value("NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS") == "1"
-_QQ_APP_ID = get_env_value("NANOBOT_QQ_APP_ID")
-_QQ_SECRET = get_env_value("NANOBOT_QQ_SECRET")
-_QQ_ALLOW_FROM = get_env_value("NANOBOT_QQ_ALLOW_FROM") or "*"
-_TIMEOUT_SECONDS = float(
-    get_env_value("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS") or "180"
-)
+_RUN_LIVE_TESTS = os.environ.get("NANOBOT_RUN_QQ_DEEPSEEK_LIVE_TESTS") == "1"
+_TIMEOUT_SECONDS = 180.0
 
 
 class _WeatherTool(Tool):
@@ -102,18 +89,9 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
         except ConfigError as exc:
             self.skipTest(f"Unable to load runtime configuration: {exc}")
 
-        missing = [
-            name
-            for name, value in (
-                ("NANOBOT_QQ_APP_ID", _QQ_APP_ID),
-                ("NANOBOT_QQ_SECRET", _QQ_SECRET),
-            )
-            if not value
-        ]
-        if missing:
-            self.skipTest(f"Missing required live-test environment variables: {', '.join(missing)}")
-        if _TIMEOUT_SECONDS <= 0:
-            self.skipTest("NANOBOT_QQ_LIVE_TEST_TIMEOUT_SECONDS must be positive")
+        qq_config = config.qq
+        if qq_config is None:
+            self.skipTest("The QQ DeepSeek live test requires configured QQ credentials")
         if config.provider.type != "openai_compat":
             self.skipTest("The QQ DeepSeek live test requires an openai_compat provider")
         if config.workspace is None:
@@ -125,11 +103,7 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
         self._channel = _ReplyTrackingQQChannel(
             "qq",
             self._bus,
-            QQChannelConfig(
-                app_id=_QQ_APP_ID or "",
-                secret=_QQ_SECRET or "",
-                allow_from=_parse_allow_from(_QQ_ALLOW_FROM),
-            ),
+            qq_config,
         )
         self._manager = ChannelManager(self._bus, (self._channel,))
         self._loop = AgentLoop(
@@ -178,8 +152,3 @@ class QQDeepSeekEndToEndLiveTest(unittest.IsolatedAsyncioTestCase):
             any(isinstance(message, ToolMessage) for message in history),
             "The tool result was not retained in the Agent session history",
         )
-
-
-def _parse_allow_from(value: str) -> Sequence[str]:
-    senders = [sender.strip() for sender in value.split(",") if sender.strip()]
-    return senders or ("*",)

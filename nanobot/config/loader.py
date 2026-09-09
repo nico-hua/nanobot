@@ -1,72 +1,60 @@
-"""Load non-sensitive JSON settings and merge secrets from ``.env``."""
+"""Load local runtime configuration from ``nanobot.json``."""
 
 from __future__ import annotations
 
 import json
-import os
+import secrets
+from contextlib import suppress
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any
 
 from pydantic import ValidationError
 
 from .schema import (
+    AuthConfig,
     NanobotConfig,
     NanobotFileConfig,
     ProviderConfig,
     QQChannelConfig,
-    QQChannelSettingsConfig,
+    WebSocketChannelConfig,
 )
 
 DEFAULT_CONFIG_PATH = Path(".nanobot/nanobot.json")
-DEFAULT_ENV_PATH = Path(".env")
-_API_KEY_ENV_VAR = "NANOBOT_API_KEY"
-_QQ_APP_ID_ENV_VAR = "NANOBOT_QQ_APP_ID"
-_QQ_SECRET_ENV_VAR = "NANOBOT_QQ_SECRET"
-_QQ_ALLOW_FROM_ENV_VAR = "NANOBOT_QQ_ALLOW_FROM"
 
 
 class ConfigError(ValueError):
-    """Raised when configuration cannot be loaded or merged safely."""
+    """Raised when configuration cannot be loaded or persisted safely."""
 
 
 def load_file_config(
     config_path: str | Path = DEFAULT_CONFIG_PATH,
 ) -> NanobotFileConfig:
-    """Load and validate the non-sensitive JSON configuration file."""
+    """Load and validate the local JSON configuration file."""
 
     path = Path(config_path)
-    try:
-        raw_config = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise ConfigError(f"Configuration file was not found: {path}") from exc
-    except OSError as exc:
-        raise ConfigError(f"Configuration file could not be read: {path}") from exc
-    except json.JSONDecodeError as exc:
-        raise ConfigError(f"Configuration file contains invalid JSON: {path}") from exc
-
-    if not isinstance(raw_config, dict):
-        raise ConfigError("Configuration file root must be a JSON object")
-
-    try:
-        return NanobotFileConfig.model_validate(raw_config)
-    except ValidationError as exc:
-        raise ConfigError("Configuration file does not match the expected schema") from exc
+    return _validate_file_config(_read_config_document(path))
 
 
 def load_nanobot_config(
     config_path: str | Path = DEFAULT_CONFIG_PATH,
-    env_path: str | Path = DEFAULT_ENV_PATH,
 ) -> NanobotConfig:
-    """Merge file settings with the provider API key from the environment."""
+    """Load the complete runtime configuration from JSON only."""
 
     path = Path(config_path)
     file_config = load_file_config(path)
-    api_key = get_env_value(_API_KEY_ENV_VAR, env_path)
-    if not api_key:
-        raise ConfigError(f"Missing required environment variable: {_API_KEY_ENV_VAR}")
+    file_config = _ensure_auth_token(file_config, path)
 
     workspace = file_config.workspace
     if not workspace.is_absolute():
         workspace = (path.parent / workspace).resolve()
+
+    try:
+        provider = ProviderConfig(**file_config.provider.model_dump())
+    except ValidationError as exc:
+        raise ConfigError("Configuration file does not match the expected schema") from exc
+
+    selected_channel_config = file_config.channel.default_config()
 
     return NanobotConfig(
         workspace=workspace,
@@ -75,62 +63,101 @@ def load_nanobot_config(
         compaction_recent_tokens=file_config.agent.compaction_recent_tokens,
         cron_timezone=file_config.cron.timezone,
         api=file_config.api,
+        auth=file_config.auth,
         default_channel=file_config.channel.default,
-        websocket=file_config.channel.websocket,
-        mcp_servers=file_config.mcp.servers,
-        qq=_load_qq_config(env_path, file_config.channel.qq),
-        provider=ProviderConfig(
-            api_key=api_key,
-            **file_config.provider.model_dump(),
+        websocket=(
+            selected_channel_config
+            if isinstance(selected_channel_config, WebSocketChannelConfig)
+            else None
         ),
+        mcp_servers=file_config.mcp.servers,
+        qq=(
+            selected_channel_config
+            if isinstance(selected_channel_config, QQChannelConfig)
+            else None
+        ),
+        provider=provider,
     )
 
 
-def get_env_value(name: str, env_path: str | Path = DEFAULT_ENV_PATH) -> str | None:
-    """Read one value, preferring the process environment over ``.env``."""
-
-    value = os.environ.get(name)
-    if value is not None:
-        return value
-
+def _read_config_document(config_path: Path) -> dict[str, Any]:
     try:
-        lines = Path(env_path).read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return None
+        raw_config = json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ConfigError(f"Configuration file was not found: {config_path}") from exc
+    except OSError as exc:
+        raise ConfigError(f"Configuration file could not be read: {config_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"Configuration file contains invalid JSON: {config_path}") from exc
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        key, separator, file_value = stripped.partition("=")
-        if separator and key.strip() == name:
-            return file_value.strip().strip("\"'")
-    return None
+    if not isinstance(raw_config, dict):
+        raise ConfigError("Configuration file root must be a JSON object")
+    return raw_config
 
 
-def _load_qq_config(
-    env_path: str | Path,
-    settings: QQChannelSettingsConfig,
-) -> QQChannelConfig | None:
-    app_id = get_env_value(_QQ_APP_ID_ENV_VAR, env_path)
-    secret = get_env_value(_QQ_SECRET_ENV_VAR, env_path)
-    if not app_id and not secret:
-        return None
-    if not app_id or not secret:
-        raise ConfigError("QQ configuration requires both app ID and secret")
-
-    allow_from = get_env_value(_QQ_ALLOW_FROM_ENV_VAR, env_path) or "*"
-    allowed_senders = [
-        sender_id.strip()
-        for sender_id in allow_from.split(",")
-        if sender_id.strip()
-    ]
+def _validate_file_config(raw_config: dict[str, Any]) -> NanobotFileConfig:
     try:
-        return QQChannelConfig(
-            app_id=app_id,
-            secret=secret,
-            allow_from=allowed_senders or ["*"],
-            streaming=settings.streaming,
-        )
+        return NanobotFileConfig.model_validate(raw_config)
     except ValidationError as exc:
-        raise ConfigError("QQ configuration does not match the expected schema") from exc
+        raise ConfigError("Configuration file does not match the expected schema") from exc
+
+
+def _ensure_auth_token(
+    file_config: NanobotFileConfig,
+    config_path: Path,
+) -> NanobotFileConfig:
+    """Generate and persist one token only when static authentication is enabled."""
+
+    if not file_config.auth.enabled or file_config.auth.token:
+        return file_config
+
+    token = secrets.token_urlsafe(32)
+    _persist_auth_token(config_path, token)
+    return file_config.model_copy(
+        update={"auth": AuthConfig(enabled=True, token=token)}
+    )
+
+
+def _persist_auth_token(config_path: Path, token: str) -> None:
+    """Atomically update only the auth token while retaining other JSON settings."""
+
+    raw_config = _read_config_document(config_path)
+    raw_auth = raw_config.get("auth")
+    if raw_auth is None:
+        raw_auth = {}
+    if not isinstance(raw_auth, dict):
+        raise ConfigError("Authentication token could not be persisted")
+    raw_auth["token"] = token
+    raw_config["auth"] = raw_auth
+    _write_config_document(config_path, raw_config, "Authentication token could not be persisted")
+
+
+def _write_config_document(
+    config_path: Path,
+    raw_config: dict[str, Any],
+    error_message: str,
+) -> None:
+    content = json.dumps(raw_config, ensure_ascii=False, indent=2) + "\n"
+    _replace_file_contents(config_path, content, error_message)
+
+
+def _replace_file_contents(path: Path, content: str, error_message: str) -> None:
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content)
+        temporary_path.replace(path)
+    except OSError as exc:
+        raise ConfigError(error_message) from exc
+    finally:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink(missing_ok=True)

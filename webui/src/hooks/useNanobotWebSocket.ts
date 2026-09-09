@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  createWebSocketAuthenticationMessage,
   createWebSocketClientMessage,
   createWebSocketStopMessage,
   isEventForSession,
@@ -10,10 +11,12 @@ import {
 import {
   applyServerEvent,
   beginConnection,
+  beginAuthentication,
   beginStopRequest,
   beginUserMessage,
   createInitialChatState,
   markConnected,
+  markAuthenticationFailed,
   markConnectionError,
   markDisconnected,
   markReconnectFailed,
@@ -28,11 +31,13 @@ import {
 
 export type { ChatMessage } from "../types/protocol";
 export type { ConnectionStatus } from "./chatState";
+export type { AuthenticationStatus } from "./chatState";
 
 type UseNanobotWebSocketOptions = {
   url: string | undefined;
   chatId: string;
   sessionId: string;
+  authToken?: string;
 };
 
 const MISSING_URL_ERROR = "VITE_NANOBOT_WEBSOCKET_URL is not configured.";
@@ -43,6 +48,7 @@ export function useNanobotWebSocket({
   url,
   chatId,
   sessionId,
+  authToken,
 }: UseNanobotWebSocketOptions) {
   const [state, setState] = useState(createInitialChatState);
   const [connectionVersion, setConnectionVersion] = useState(0);
@@ -70,6 +76,48 @@ export function useNanobotWebSocket({
       if (!isEventForSession(event, activeSessionRef.current)) {
         return;
       }
+      if (event.type === "ready" && event.authentication_required) {
+        const token = authToken?.trim();
+        if (!token) {
+          setState((currentState) =>
+            markAuthenticationFailed(
+              currentState,
+              "Nanobot authentication requires a configured browser token.",
+            ),
+          );
+          connectionRef.current?.close();
+          return;
+        }
+
+        setState(beginAuthentication);
+        const connection = connectionRef.current;
+        if (
+          connection === null ||
+          !connection.send(
+            JSON.stringify(createWebSocketAuthenticationMessage(token)),
+          )
+        ) {
+          setState((currentState) =>
+            markAuthenticationFailed(
+              currentState,
+              "Nanobot authentication could not be completed.",
+            ),
+          );
+          connection?.close();
+        }
+        return;
+      }
+      if (
+        event.type === "error" &&
+        (event.code === "authentication_failed" ||
+          event.code === "authentication_required")
+      ) {
+        setState((currentState) =>
+          markAuthenticationFailed(currentState, "Nanobot authentication failed."),
+        );
+        connectionRef.current?.close();
+        return;
+      }
       if (
         event.type === "turn_end" ||
         event.type === "message" ||
@@ -83,7 +131,7 @@ export function useNanobotWebSocket({
         markServerError(currentState, INVALID_EVENT_ERROR),
       );
     }
-  }, []);
+  }, [authToken]);
 
   useEffect(() => {
     if (!url) {
@@ -140,6 +188,18 @@ export function useNanobotWebSocket({
         );
         return false;
       }
+      if (
+        state.authenticationStatus !== "not_required" &&
+        state.authenticationStatus !== "authenticated"
+      ) {
+        setState((currentState) =>
+          markServerError(
+            currentState,
+            "Nanobot authentication is not ready. Wait for the connection before sending.",
+          ),
+        );
+        return false;
+      }
 
       setState((currentState) => beginUserMessage(currentState, text));
       stopRequestedRef.current = false;
@@ -147,7 +207,7 @@ export function useNanobotWebSocket({
         JSON.stringify(createWebSocketClientMessage(chatId, sessionId, text)),
       );
     },
-    [chatId, sessionId],
+    [chatId, sessionId, state.authenticationStatus],
   );
 
   const stopGeneration = useCallback((): boolean => {
@@ -209,6 +269,7 @@ export function useNanobotWebSocket({
 
   return {
     connectionStatus: state.connectionStatus,
+    authenticationStatus: state.authenticationStatus,
     connectionVersion,
     error: state.error,
     isSending: state.isSending,

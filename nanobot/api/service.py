@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 from typing import Any
@@ -12,7 +13,7 @@ from aiohttp import web
 
 from ..agent import AgentLoop
 from ..bus import InboundMessage, OutboundMessage
-from ..config import ApiConfig
+from ..config import ApiConfig, AuthConfig
 from ..providers import AIMessage, BaseMessage
 from ..session import Session, SessionManager
 
@@ -37,18 +38,28 @@ class HttpApiService:
         agent_loop: AgentLoop,
         session_manager: SessionManager,
         config: ApiConfig,
+        auth: AuthConfig | None = None,
     ) -> None:
         if not isinstance(config, ApiConfig):
             raise TypeError("HttpApiService requires an ApiConfig")
         if not isinstance(session_manager, SessionManager):
             raise TypeError("HttpApiService requires a SessionManager")
+        if auth is not None and not isinstance(auth, AuthConfig):
+            raise TypeError("HttpApiService requires an AuthConfig")
 
         self._agent_loop = agent_loop
         self._session_manager = session_manager
         self._config = config
+        self._auth = auth if auth is not None else AuthConfig()
+        if self._auth.enabled and not self._auth.token:
+            raise ValueError("Enabled HTTP API authentication requires a configured token")
         self._app = web.Application(
             client_max_size=_MAX_REQUEST_BODY_BYTES,
-            middlewares=(_cors_middleware, _error_middleware),
+            middlewares=(
+                _cors_middleware,
+                _error_middleware,
+                _auth_middleware(self._auth),
+            ),
         )
         self._app.router.add_get("/health", self._health)
         self._app.router.add_post("/v1/messages", self._post_message)
@@ -272,11 +283,16 @@ async def _cors_middleware(
 ) -> web.StreamResponse:
     """Allow the local Web UI to read the local-only API responses."""
 
-    response = await handler(request)
     origin = request.headers.get("Origin")
+    if request.method == "OPTIONS" and _is_local_browser_origin(origin):
+        response: web.StreamResponse = web.Response(status=204)
+    else:
+        response = await handler(request)
     if _is_local_browser_origin(origin):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return response
 
 
@@ -297,6 +313,41 @@ async def _error_middleware(
     except Exception:
         logger.exception("HTTP API request failed")
         return _error_response(500, "internal_error", "Internal server error")
+
+
+def _auth_middleware(auth: AuthConfig) -> web.middleware:
+    """Protect API routes with one configured bearer token when enabled."""
+
+    @web.middleware
+    async def middleware(
+        request: web.Request,
+        handler: Any,
+    ) -> web.StreamResponse:
+        if not auth.enabled or request.path == "/health":
+            return await handler(request)
+        if _has_valid_bearer_token(request.headers.get("Authorization"), auth.token):
+            return await handler(request)
+        return _error_response(
+            401,
+            "unauthorized",
+            "Authentication is required",
+        )
+
+    return middleware
+
+
+def _has_valid_bearer_token(value: str | None, expected_token: str) -> bool:
+    """Compare a Bearer credential without placing it in an error or log."""
+
+    if not expected_token or not isinstance(value, str):
+        return False
+    scheme, separator, token = value.partition(" ")
+    return (
+        scheme == "Bearer"
+        and separator == " "
+        and bool(token)
+        and hmac.compare_digest(token, expected_token)
+    )
 
 
 def _json_response(payload: dict[str, Any], *, status: int = 200) -> web.Response:

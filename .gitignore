@@ -9,6 +9,7 @@ htmlcov/
 .venv/
 venv/
 .env
+/.nanobot/nanobot.json
 
 # Local workspace runtime data
 /.nanobot/workspace/

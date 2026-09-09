@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 from collections.abc import Mapping
@@ -11,7 +12,7 @@ from typing import Any
 from aiohttp import WSCloseCode, WSMsgType, web
 
 from ...bus import MessageBus, OutboundMessage
-from ...config import WebSocketChannelConfig
+from ...config import AuthConfig, WebSocketChannelConfig
 from ..base import BaseChannel
 
 logger = logging.getLogger(__name__)
@@ -30,18 +31,25 @@ class WebSocketChannel(BaseChannel):
         name: str,
         message_bus: MessageBus,
         config: WebSocketChannelConfig,
+        auth: AuthConfig | None = None,
     ) -> None:
         super().__init__(name, message_bus)
         if not isinstance(config, WebSocketChannelConfig):
             raise TypeError("WebSocketChannel requires a WebSocketChannelConfig")
+        if auth is not None and not isinstance(auth, AuthConfig):
+            raise TypeError("WebSocketChannel requires an AuthConfig")
 
         self.config = config
+        self._auth = auth if auth is not None else AuthConfig()
+        if self._auth.enabled and not self._auth.token:
+            raise ValueError("Enabled WebSocket authentication requires a configured token")
         self._app = web.Application(client_max_size=_MAX_MESSAGE_BYTES)
         self._app.router.add_get(_WEBSOCKET_PATH, self._handle_connection)
         self._runner: web.AppRunner | None = None
         self._connections_by_session: dict[str, web.WebSocketResponse] = {}
         self._connection_sessions: dict[web.WebSocketResponse, str | None] = {}
         self._connection_routes: dict[web.WebSocketResponse, tuple[str, str]] = {}
+        self._authenticated_connections: set[web.WebSocketResponse] = set()
         self._connection_tasks: set[asyncio.Task[Any]] = set()
         self._stopping = False
 
@@ -127,6 +135,7 @@ class WebSocketChannel(BaseChannel):
                     self._connections_by_session.clear()
                     self._connection_sessions.clear()
                     self._connection_routes.clear()
+                    self._authenticated_connections.clear()
                     if self.started:
                         await super().stop()
                     self._stopping = False
@@ -222,16 +231,22 @@ class WebSocketChannel(BaseChannel):
         self._connection_sessions[connection] = None
 
         try:
-            await self._send_event(connection, {"type": "ready"})
+            ready_event: dict[str, Any] = {"type": "ready"}
+            if self._auth.enabled:
+                ready_event["authentication_required"] = True
+            await self._send_event(connection, ready_event)
             async for incoming in connection:
                 if incoming.type is WSMsgType.TEXT:
                     await self._handle_client_text(connection, incoming.data)
                 elif incoming.type is WSMsgType.BINARY:
-                    await self._send_error(
-                        connection,
-                        "unsupported_message",
-                        "WebSocket messages must contain JSON text",
-                    )
+                    if self._requires_authentication(connection):
+                        await self._reject_unauthenticated_connection(connection)
+                    else:
+                        await self._send_error(
+                            connection,
+                            "unsupported_message",
+                            "WebSocket messages must contain JSON text",
+                        )
                 elif incoming.type is WSMsgType.ERROR:
                     logger.warning("WebSocket connection closed with an error")
                     break
@@ -255,6 +270,9 @@ class WebSocketChannel(BaseChannel):
         try:
             payload = json.loads(text)
         except json.JSONDecodeError:
+            if self._requires_authentication(connection):
+                await self._reject_unauthenticated_connection(connection)
+                return
             await self._send_error(
                 connection,
                 "invalid_json",
@@ -263,11 +281,17 @@ class WebSocketChannel(BaseChannel):
             return
 
         if not isinstance(payload, dict):
+            if self._requires_authentication(connection):
+                await self._reject_unauthenticated_connection(connection)
+                return
             await self._send_error(
                 connection,
                 "invalid_message",
                 "WebSocket message must be a JSON object",
             )
+            return
+        if self._requires_authentication(connection):
+            await self._authenticate_connection(connection, payload)
             return
         if payload.get("type") != "message":
             await self._send_error(
@@ -326,6 +350,44 @@ class WebSocketChannel(BaseChannel):
                 "Message could not be accepted",
             )
 
+    def _requires_authentication(self, connection: web.WebSocketResponse) -> bool:
+        return self._auth.enabled and connection not in self._authenticated_connections
+
+    async def _authenticate_connection(
+        self,
+        connection: web.WebSocketResponse,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Accept exactly one token-bearing first event before routing messages."""
+
+        if payload.get("type") != "authenticate":
+            await self._reject_unauthenticated_connection(connection)
+            return
+
+        token = payload.get("token")
+        if not isinstance(token, str) or not hmac.compare_digest(token, self._auth.token):
+            await self._send_error(
+                connection,
+                "authentication_failed",
+                "Authentication failed",
+            )
+            await connection.close(code=WSCloseCode.POLICY_VIOLATION)
+            return
+
+        self._authenticated_connections.add(connection)
+        await self._send_event(connection, {"type": "authenticated"})
+
+    async def _reject_unauthenticated_connection(
+        self,
+        connection: web.WebSocketResponse,
+    ) -> None:
+        await self._send_error(
+            connection,
+            "authentication_required",
+            "Authentication is required before sending messages",
+        )
+        await connection.close(code=WSCloseCode.POLICY_VIOLATION)
+
     def _resolve_session_id(self, value: object, chat_id: str) -> str | None:
         if value is None:
             return f"{self.name}:{chat_id.strip()}"
@@ -383,6 +445,7 @@ class WebSocketChannel(BaseChannel):
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def _remove_connection(self, connection: web.WebSocketResponse) -> None:
+        self._authenticated_connections.discard(connection)
         self._connection_routes.pop(connection, None)
         session_id = self._connection_sessions.pop(connection, None)
         if self._connections_by_session.get(session_id) is connection:
