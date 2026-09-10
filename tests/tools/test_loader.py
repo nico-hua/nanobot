@@ -9,13 +9,23 @@ from pathlib import Path
 
 from nanobot.cron import CronService
 from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry
-from nanobot.tools.builtin import CronTool, WebFetchTool, WebSearchTool
+from nanobot.tools.builtin import (
+    ApplyPatchTool,
+    CronTool,
+    FindFilesTool,
+    GrepTool,
+    WebFetchTool,
+    WebSearchTool,
+)
 
 
 class ToolLoaderTest(unittest.TestCase):
     EXPECTED_TOOL_NAMES = (
+        "apply_patch",
         "edit_file",
         "exec",
+        "find_files",
+        "grep",
         "list_dir",
         "read_file",
         "web_fetch",
@@ -45,6 +55,9 @@ class ToolLoaderTest(unittest.TestCase):
             all(tool.workspace == self.workspace for tool in workspace_tools)
         )
         self.assertIsInstance(registry.get("web_fetch"), WebFetchTool)
+        self.assertIsInstance(registry.get("apply_patch"), ApplyPatchTool)
+        self.assertIsInstance(registry.get("find_files"), FindFilesTool)
+        self.assertIsInstance(registry.get("grep"), GrepTool)
 
     def test_skips_base_and_abstract_tools(self) -> None:
         registry = ToolRegistry()
@@ -113,7 +126,10 @@ class ToolLoaderTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(names, ("cron", *self.EXPECTED_TOOL_NAMES))
+        self.assertEqual(
+            names,
+            ("apply_patch", "cron", *self.EXPECTED_TOOL_NAMES[1:]),
+        )
         self.assertIsInstance(registry.get("cron"), CronTool)
 
 async def _no_op(task: object) -> None:

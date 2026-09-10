@@ -117,14 +117,14 @@
 - [x] 新增网络内置工具并统一收敛到 `tools/builtin/web.py`：`web_search` 通过 Tavily Search 获取有限的标题、URL 和摘要，配置由 `tools.web_search.tavily_api_key` 注入；`web_fetch` 使用现有 `aiohttp` 获取一个公开 HTTP(S) 页面，返回最终 URL、HTTP 状态与可读文本。两者均不阻塞 Agent 的异步执行。
 - [x] `web_fetch` 设置 10 秒总超时、1 MB 响应下载上限与 20,000 字符结果上限；支持 HTML 和常见文本响应，HTML 仅提取可读文本并跳过脚本、样式等内容。非 2xx、超时、网络失败、非文本/二进制响应、超限和编码失败统一返回 `ToolResult.error`，不执行页面 JavaScript。
 - [x] `ToolLoader` 自动注册无 workspace 依赖的 `web_search` 和 `web_fetch`；注入 `MessageBus` 的主 Agent 工具上下文还会自动注册 `message`，子 Agent 的独立工具上下文不注入总线，因此不能直接向用户渠道发消息。Tavily 搜索固定使用有限数量的 `basic` 结果，缺少 key、非 2xx、超时、网络失败及异常 JSON/响应格式均返回 `ToolResult.error`；新增全程使用 fake HTTP session、fake DNS resolver、MessageBus 和 QQ client 的测试，覆盖网络工具与主动消息的成功和错误路径。完整离线测试为 `465 passed, 7 skipped`。
+- [x] 扩展 workspace 文件开发工具：`find_files` 支持稳定排序的文件名或 glob 查找（含 `**/*.py`），`grep` 使用正则表达式搜索 UTF-8 文本并返回相对路径、行号与匹配行；两者限制结果与输出规模，跳过 `.git`、`node_modules`、`dist`、`.vite` 等生成目录，并拒绝绝对路径、`..` 和可逃逸 workspace 的符号链接。
+- [x] 新增 `apply_patch`：仅接受明确的 `*** Begin Patch` / `*** End Patch` 结构化补丁，支持 `Add File`、带精确唯一上下文 hunk 的 `Update File` 与 `Delete File`。所有变更会先在内存中解析和验证；再以同目录临时文件、替换与备份回滚提交，避免格式错误、上下文缺失/歧义或多文件写入失败时留下部分修改。仅处理 workspace 内的 UTF-8 文本，不实现二进制修改、模糊匹配或 Git diff 完整兼容。
+- [x] 为上述文件工具补充隔离测试，覆盖 glob/正则匹配、输出限制、UTF-8、路径与符号链接边界，以及多文件补丁回滚；最新完整离线测试为 `500 passed, 10 skipped`。
 
 ## 待开发功能
 
 ### 核心开发工具
 
-- [ ] `find_files`：查找 workspace 内文件。
-- [ ] `grep`：搜索文件内容。
-- [ ] `apply_patch`：批量、结构化修改文件。
 - [ ] `write_stdin`：向长时间运行命令写入标准输入。
 - [ ] `list_exec_sessions`：查看运行中的命令。
 
