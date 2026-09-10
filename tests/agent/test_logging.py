@@ -81,6 +81,7 @@ class LoggingConfigurationTest(unittest.TestCase):
                             "api_base": "https://example.test/v1",
                             "model": "test-model",
                         },
+                        "channel": {"default": "websocket"},
                     }
                 ),
                 encoding="utf-8",

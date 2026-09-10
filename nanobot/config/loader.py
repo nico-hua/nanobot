@@ -64,6 +64,7 @@ def load_nanobot_config(
         cron_timezone=file_config.cron.timezone,
         api=file_config.api,
         auth=file_config.auth,
+        tools=file_config.tools,
         default_channel=file_config.channel.default,
         websocket=(
             selected_channel_config

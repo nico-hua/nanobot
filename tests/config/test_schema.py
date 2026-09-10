@@ -9,6 +9,8 @@ from nanobot.config import (
     AuthConfig,
     MCPServerConfig,
     QQChannelConfig,
+    ToolsConfig,
+    WebSearchToolConfig,
     WebSocketChannelConfig,
 )
 from nanobot.config.schema import NanobotConfig, NanobotFileConfig, ProviderConfig
@@ -134,6 +136,18 @@ class AuthConfigTest(unittest.TestCase):
         self.assertEqual(AuthConfig(enabled=True, token="  ").token, "")
 
 
+class ToolsConfigTest(unittest.TestCase):
+    def test_defaults_to_an_unconfigured_tavily_key(self) -> None:
+        config = ToolsConfig()
+
+        self.assertEqual(config.web_search.tavily_api_key, "")
+
+    def test_normalizes_the_tavily_key_without_revealing_it(self) -> None:
+        config = WebSearchToolConfig(tavily_api_key="  test-tavily-key  ")
+
+        self.assertEqual(config.tavily_api_key, "test-tavily-key")
+
+
 class WebSocketChannelConfigTest(unittest.TestCase):
     def test_defaults_to_a_local_listener(self) -> None:
         config = WebSocketChannelConfig()
@@ -170,6 +184,7 @@ class NanobotConfigTest(unittest.TestCase):
         self.assertEqual(config.cron_timezone, "Asia/Shanghai")
         self.assertFalse(config.api.enabled)
         self.assertFalse(config.auth.enabled)
+        self.assertEqual(config.tools.web_search.tavily_api_key, "")
         self.assertIsNone(config.websocket)
 
     def test_rejects_an_invalid_cron_timezone(self) -> None:
@@ -220,6 +235,7 @@ class NanobotFileConfigTest(unittest.TestCase):
                 "compaction_recent_tokens": 96,
             },
             cron={"timezone": "UTC"},
+            tools={"web_search": {"tavily_api_key": "test-tavily-key"}},
             provider={
                 "type": "openai_compat",
                 "api_key": "test-key",
@@ -239,6 +255,7 @@ class NanobotFileConfigTest(unittest.TestCase):
 
         self.assertEqual(config.agent.context_window_tokens, 512)
         self.assertEqual(config.cron.timezone, "UTC")
+        self.assertEqual(config.tools.web_search.tavily_api_key, "test-tavily-key")
         self.assertEqual(config.channel.default, "websocket")
         default_channel = config.channel.default_config()
         self.assertIsInstance(default_channel, WebSocketChannelConfig)

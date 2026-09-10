@@ -21,6 +21,8 @@ from .schema import (
     ProviderConfig,
     ProviderSettingsConfig,
     QQChannelConfig,
+    ToolsConfig,
+    WebSearchToolConfig,
     WebSocketChannelConfig,
 )
 
@@ -41,6 +43,8 @@ __all__ = [
     "ProviderConfig",
     "ProviderSettingsConfig",
     "QQChannelConfig",
+    "ToolsConfig",
+    "WebSearchToolConfig",
     "WebSocketChannelConfig",
     "load_file_config",
     "load_nanobot_config",

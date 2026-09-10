@@ -32,6 +32,11 @@ class ConfigLoaderTest(unittest.TestCase):
                             "port": 8100,
                             "request_timeout_seconds": 15,
                         },
+                        "tools": {
+                            "web_search": {
+                                "tavily_api_key": "test-tavily-key",
+                            },
+                        },
                         "channel": {
                             "default": "qq",
                             "qq": {
@@ -74,6 +79,7 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertTrue(config.api.enabled)
         self.assertEqual(config.api.port, 8100)
         self.assertEqual(config.api.request_timeout_seconds, 15)
+        self.assertEqual(config.tools.web_search.tavily_api_key, "test-tavily-key")
         self.assertIsNone(config.websocket)
         self.assertIn("local", config.mcp_servers)
         self.assertEqual(file_config.provider.api_key, "test-key")

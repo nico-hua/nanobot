@@ -98,6 +98,7 @@ class Application:
             workspace=config.workspace,
             cron_service=self._cron_service,
             cron_timezone=config.cron_timezone,
+            web_search_tavily_api_key=config.tools.web_search.tavily_api_key,
         )
         self._subagent_manager = SubagentManager(
             AgentRunner(),

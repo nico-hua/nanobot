@@ -9,7 +9,7 @@ from pathlib import Path
 
 from nanobot.cron import CronService
 from nanobot.tools import Tool, ToolContext, ToolLoader, ToolRegistry
-from nanobot.tools.builtin import CronTool
+from nanobot.tools.builtin import CronTool, WebFetchTool, WebSearchTool
 
 
 class ToolLoaderTest(unittest.TestCase):
@@ -18,6 +18,8 @@ class ToolLoaderTest(unittest.TestCase):
         "exec",
         "list_dir",
         "read_file",
+        "web_fetch",
+        "web_search",
         "write_file",
     )
 
@@ -36,7 +38,13 @@ class ToolLoaderTest(unittest.TestCase):
 
         self.assertEqual(names, self.EXPECTED_TOOL_NAMES)
         self.assertEqual(tuple(tool.name for tool in registry.tools), names)
-        self.assertTrue(all(tool.workspace == self.workspace for tool in registry.tools))
+        workspace_tools = tuple(
+            tool for tool in registry.tools if hasattr(tool, "workspace")
+        )
+        self.assertTrue(
+            all(tool.workspace == self.workspace for tool in workspace_tools)
+        )
+        self.assertIsInstance(registry.get("web_fetch"), WebFetchTool)
 
     def test_skips_base_and_abstract_tools(self) -> None:
         registry = ToolRegistry()
@@ -88,8 +96,9 @@ class ToolLoaderTest(unittest.TestCase):
 
         names = ToolLoader().load(registry, ToolContext())
 
-        self.assertEqual(names, ())
-        self.assertEqual(registry.tools, ())
+        self.assertEqual(names, ("web_fetch", "web_search"))
+        self.assertIsInstance(registry.get("web_fetch"), WebFetchTool)
+        self.assertIsInstance(registry.get("web_search"), WebSearchTool)
 
     def test_registers_cron_tool_when_the_service_is_injected(self) -> None:
         registry = ToolRegistry()

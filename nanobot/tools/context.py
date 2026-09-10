@@ -34,6 +34,7 @@ class ToolContext:
     workspace: str | Path | None = None
     cron_service: CronService | None = None
     cron_timezone: str = "Asia/Shanghai"
+    web_search_tavily_api_key: str = field(default="", repr=False)
     subagent_manager: SubagentManager | None = None
     session_manager: SessionManager | None = None
     message_bus: MessageBus | None = None

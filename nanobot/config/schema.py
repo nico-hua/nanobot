@@ -186,6 +186,29 @@ class CronConfig(BaseModel):
         return _validate_timezone(value)
 
 
+class WebSearchToolConfig(BaseModel):
+    """Tavily credentials for the built-in ``web_search`` tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tavily_api_key: str = ""
+
+    @field_validator("tavily_api_key")
+    @classmethod
+    def _normalize_api_key(cls, value: str) -> str:
+        """Treat whitespace-only keys as intentionally unconfigured."""
+
+        return value.strip()
+
+
+class ToolsConfig(BaseModel):
+    """Settings for built-in tools configured by the local runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    web_search: WebSearchToolConfig = Field(default_factory=WebSearchToolConfig)
+
+
 class ChannelConfig(BaseModel):
     """Channel selection and local channel configuration."""
 
@@ -297,6 +320,7 @@ class NanobotFileConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     provider: ProviderSettingsConfig
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     channel: ChannelConfig = Field(default_factory=ChannelConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
 
@@ -314,6 +338,7 @@ class NanobotConfig(BaseModel):
     cron_timezone: str = "Asia/Shanghai"
     api: ApiConfig = Field(default_factory=ApiConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     default_channel: str = "qq"
     websocket: WebSocketChannelConfig | None = None
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)

@@ -111,6 +111,12 @@
 - [x] 配置加载只解析、校验并创建 `channel.default` 指向的 Channel；未选中的 QQ 或 WebSocket 配置可暂时不完整，切换默认 Channel 前再补全目标配置。
 - [x] 在 `docs/` 统一维护开发进度、命令说明和面向开发者的 Web UI React 代码导读。
 
+### 2026-09-10
+
+- [x] 新增网络内置工具并统一收敛到 `tools/builtin/web.py`：`web_search` 通过 Tavily Search 获取有限的标题、URL 和摘要，配置由 `tools.web_search.tavily_api_key` 注入；`web_fetch` 使用现有 `aiohttp` 获取一个公开 HTTP(S) 页面，返回最终 URL、HTTP 状态与可读文本。两者均不阻塞 Agent 的异步执行。
+- [x] `web_fetch` 设置 10 秒总超时、1 MB 响应下载上限与 20,000 字符结果上限；支持 HTML 和常见文本响应，HTML 仅提取可读文本并跳过脚本、样式等内容。非 2xx、超时、网络失败、非文本/二进制响应、超限和编码失败统一返回 `ToolResult.error`，不执行页面 JavaScript。
+- [x] `ToolLoader` 自动注册无 workspace 依赖的 `web_search` 和 `web_fetch`。Tavily 搜索固定使用有限数量的 `basic` 结果，缺少 key、非 2xx、超时、网络失败及异常 JSON/响应格式均返回 `ToolResult.error`；新增全程使用 fake HTTP session 和 fake DNS resolver 的测试，覆盖两项工具的请求、结果转换与错误路径。完整离线测试为 `458 passed, 7 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具
@@ -123,8 +129,6 @@
 
 ### 常用 Agent 能力
 
-- [ ] `web_search`：网络搜索。
-- [ ] `web_fetch`：读取网页内容。
 - [ ] `message`：主动发送一般消息。
 - [ ] 其他真实 Channel，以及媒体、文件和流式消息支持。
 - [ ] HTTP API 的流式响应、异步任务查询和完整 OpenAI 兼容协议。

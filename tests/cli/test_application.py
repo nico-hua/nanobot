@@ -20,6 +20,8 @@ from nanobot.config import (
     MCPServerConfig,
     NanobotConfig,
     ProviderConfig,
+    ToolsConfig,
+    WebSearchToolConfig,
 )
 from nanobot.cron import CronCallback, CronService
 from nanobot.memory import MemoryConsolidator
@@ -459,7 +461,15 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         loop = RecordingLoop(events)
         tool_loader = NoopToolLoader()
         app = Application(
-            self._config(),
+            self._config().model_copy(
+                update={
+                    "tools": ToolsConfig(
+                        web_search=WebSearchToolConfig(
+                            tavily_api_key="test-tavily-key",
+                        )
+                    )
+                }
+            ),
             provider_factory=lambda config: FakeProvider(),
             channel_factory=lambda name, bus, config: RecordingChannel(name, bus, events),
             mcp_provider_factory=lambda registry, servers: FakeMCPProvider(
@@ -474,6 +484,14 @@ class ApplicationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(tool_loader.contexts), 2)
         self.assertIsNone(tool_loader.contexts[0].subagent_manager)
         self.assertIs(tool_loader.contexts[1].subagent_manager, app.subagent_manager)
+        self.assertEqual(
+            tool_loader.contexts[0].web_search_tavily_api_key,
+            "test-tavily-key",
+        )
+        self.assertEqual(
+            tool_loader.contexts[1].web_search_tavily_api_key,
+            "test-tavily-key",
+        )
 
     async def test_start_failure_closes_started_resources(self) -> None:
         events: list[str] = []

@@ -6,7 +6,7 @@
 
 - 统一的 `LLMProvider` 抽象，以及 OpenAI-compatible 和 Anthropic-compatible Provider。
 - Provider 无关的消息、工具调用和 `LLMResponse` 模型。
-- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。
+- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。网络工具统一位于 `tools/builtin/web.py`：`web_search` 通过 Tavily 返回有限的标题、URL 与摘要，`web_fetch` 以受限的 HTTP(S) 请求读取一个已知公开页面并提取文本；后者拒绝本机和内网目标、限制重定向与响应大小，且不执行页面 JavaScript。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
 - 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus；流式工具执行前可单独通知调用方工具名称和参数。
 - QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话，并可停止当前 session 的流式生成。
@@ -33,9 +33,9 @@ HTTP API 的 `POST /v1/messages` 为了返回当前请求的响应，会直接�
 ## 配置
 
 - `.env` 仅保存 Web UI 的浏览器可见 `VITE_*` 配置；可从 `.env.example` 开始填写。`VITE_NANOBOT_WEBSOCKET_URL` 和 `VITE_NANOBOT_API_URL` 分别需与 `channel.websocket` 和 `api` 的 host、port 保持一致，认证开启时可额外设置 `VITE_NANOBOT_AUTH_TOKEN`。
-- `.nanobot/nanobot.json` 是本地后端 Agent 的完整配置，包含 Provider API key、QQ 凭据、`workspace`、日志、`agent` 预算、`cron` 时区、`channel`、`mcp.servers` 与本地 HTTP API 设置。新建的本地文件会被 Git 忽略；首次配置可从 `.nanobot/nanobot.example.json` 复制。若旧仓库已跟踪该文件，先执行 `git rm --cached .nanobot/nanobot.json` 再提交，不要提交真实凭据。
+- `.nanobot/nanobot.json` 是本地后端 Agent 的完整配置，包含 Provider API key、QQ 凭据、`workspace`、日志、`agent` 预算、`cron` 时区、`tools`、`channel`、`mcp.servers` 与本地 HTTP API 设置。新建的本地文件会被 Git 忽略；首次配置可从 `.nanobot/nanobot.example.json` 复制。若旧仓库已跟踪该文件，先执行 `git rm --cached .nanobot/nanobot.json` 再提交，不要提交真实凭据。
 
-  Provider 凭据位于 `provider.api_key`；QQ Channel 使用 `channel.qq.app_id`、`channel.qq.secret` 与 `channel.qq.allow_from`（字符串列表）。启动时只解析、校验并创建 `channel.default` 指向的 Channel：例如默认使用 `websocket` 时，QQ 配置可以尚未填写；切换默认 Channel 前再补全目标 Channel 的配置即可。
+  Provider 凭据位于 `provider.api_key`；Tavily Search 使用 `tools.web_search.tavily_api_key`；QQ Channel 使用 `channel.qq.app_id`、`channel.qq.secret` 与 `channel.qq.allow_from`（字符串列表）。启动时只解析、校验并创建 `channel.default` 指向的 Channel：例如默认使用 `websocket` 时，QQ 配置可以尚未填写；切换默认 Channel 前再补全目标 Channel 的配置即可。
 - workspace 是 Agent 可操作与存储运行时数据的范围。Session、长期记忆和记忆事件默认写入 workspace，项目的 `/.nanobot/workspace/` 已被 Git 忽略。
 
 不要把 API key、QQ secret、Session 内容或 workspace 运行时数据提交到仓库。

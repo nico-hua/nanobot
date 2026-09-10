@@ -45,6 +45,11 @@
       "streaming": true
     }
   },
+  "tools": {
+    "web_search": {
+      "tavily_api_key": ""
+    }
+  },
   "mcp": {
     "servers": {}
   }
