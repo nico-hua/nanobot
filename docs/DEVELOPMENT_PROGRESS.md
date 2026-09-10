@@ -113,6 +113,7 @@
 
 ### 2026-09-10
 
+- [x] 新增 docs/ARCHITECTURE.md：基于当前实际源码整理 CLI/Application、MessageBus、AgentLoop/AgentRunner、Provider、Tool、Session/Memory、Command/Goal/Cron/Subagent、Channel/API/Web UI、配置生命周期与关键不变量的开发者架构说明，并明确教学版当前的设计取舍和暂缓能力。
 - [x] 新增 `message` 内置工具：仅接受文本内容，从当前 `RequestContext` 读取可信的 session/channel/chat/sender 路由，经共享 `MessageBus` 发布普通 `OutboundMessage`，不允许模型指定其他发送目标。缺少上下文、空内容或总线发布失败会返回 `ToolResult.error`；工具不直接依赖具体 Channel，也不会发送流式 `delta` 或 `turn_end` 事件。QQ 将 `source=message` 与 cron、goal、subagent 一样视为主动消息，不复用缓存的入站 `message_id`，避免 QQ 去重。
 - [x] 新增网络内置工具并统一收敛到 `tools/builtin/web.py`：`web_search` 通过 Tavily Search 获取有限的标题、URL 和摘要，配置由 `tools.web_search.tavily_api_key` 注入；`web_fetch` 使用现有 `aiohttp` 获取一个公开 HTTP(S) 页面，返回最终 URL、HTTP 状态与可读文本。两者均不阻塞 Agent 的异步执行。
 - [x] `web_fetch` 设置 10 秒总超时、1 MB 响应下载上限与 20,000 字符结果上限；支持 HTML 和常见文本响应，HTML 仅提取可读文本并跳过脚本、样式等内容。非 2xx、超时、网络失败、非文本/二进制响应、超限和编码失败统一返回 `ToolResult.error`，不执行页面 JavaScript。
