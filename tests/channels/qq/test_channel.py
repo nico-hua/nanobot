@@ -48,7 +48,7 @@ class FakeBotPyIntents:
 
 
 class FakeBotPySDKClient:
-    instances: list[FakeBotPySDKClient] = []
+    instances: list[FakeBotPySDKClient] = []  # noqa: RUF012
 
     def __init__(self, *arguments, **keyword_arguments) -> None:
         self.arguments = arguments
@@ -276,6 +276,43 @@ class QQChannelTest(unittest.IsolatedAsyncioTestCase):
                     "openid": "user-1",
                     "msg_type": 2,
                     "markdown": {"content": "Goal progress"},
+                }
+            ],
+        )
+
+    async def test_sends_a_message_tool_delivery_as_an_initiated_message(self) -> None:
+        bus = MessageBus()
+        client = FakeQQClient()
+        channel = _channel(bus, client)
+        await channel.start()
+        await asyncio.sleep(0)
+
+        # A regular inbound message creates a cached reply ID. The proactive
+        # source marker must still prevent the message tool from reusing it.
+        await channel.handle_c2c_message(c2c_event())
+        await channel.send(
+            OutboundMessage(
+                channel="qq",
+                chat_id="user-1",
+                sender_id="user-1",
+                session_id="qq:user-1",
+                content="Proactive update",
+                metadata={
+                    "source": "message",
+                    "qq_chat_type": "c2c",
+                    "message_id": "origin-message-1",
+                },
+            )
+        )
+        await channel.stop()
+
+        self.assertEqual(
+            client.api.c2c_calls,
+            [
+                {
+                    "openid": "user-1",
+                    "msg_type": 2,
+                    "markdown": {"content": "Proactive update"},
                 }
             ],
         )

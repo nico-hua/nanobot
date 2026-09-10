@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _C2C = "c2c"
 _GROUP = "group"
+_INITIATED_SOURCES = frozenset({"cron", "goal", "message", "subagent"})
 
 
 @dataclass(frozen=True)
@@ -120,11 +121,11 @@ class QQChannel(BaseChannel):
         chat_type = _metadata_text(message.metadata, "qq_chat_type") or (
             context.chat_type if context is not None else None
         )
-        # Delayed runtime results and goal progress are initiated messages. They
-        # must not reuse a cached inbound ``msg_id``: qq-botpy would otherwise
-        # submit its default ``msg_seq=1`` again and QQ would deduplicate it.
+        # Proactive runtime messages must not reuse a cached inbound ``msg_id``:
+        # qq-botpy would otherwise submit its default ``msg_seq=1`` again and
+        # QQ would deduplicate it.
         message_id = None
-        if message.metadata.get("source") not in {"cron", "subagent", "goal"}:
+        if message.metadata.get("source") not in _INITIATED_SOURCES:
             message_id = _metadata_text(message.metadata, "message_id") or (
                 context.message_id if context is not None else None
             )

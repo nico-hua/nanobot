@@ -6,7 +6,7 @@
 
 - 统一的 `LLMProvider` 抽象，以及 OpenAI-compatible 和 Anthropic-compatible Provider。
 - Provider 无关的消息、工具调用和 `LLMResponse` 模型。
-- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。网络工具统一位于 `tools/builtin/web.py`：`web_search` 通过 Tavily 返回有限的标题、URL 与摘要，`web_fetch` 以受限的 HTTP(S) 请求读取一个已知公开页面并提取文本；后者拒绝本机和内网目标、限制重定向与响应大小，且不执行页面 JavaScript。
+- 内置 workspace 工具：读取、写入、精确编辑、列目录和一次性执行命令；四个文件工具统一位于 `tools/builtin/filesystem.py`，共用 workspace 路径安全边界。网络工具统一位于 `tools/builtin/web.py`：`web_search` 通过 Tavily 返回有限的标题、URL 与摘要，`web_fetch` 以受限的 HTTP(S) 请求读取一个已知公开页面并提取文本；后者拒绝本机和内网目标、限制重定向与响应大小，且不执行页面 JavaScript。`message` 工具经共享 `MessageBus` 向当前 RequestContext 所属渠道主动发送一条文本消息，不能由模型改写目标路由；QQ 会将其作为主动消息处理，不复用入站 `message_id`。
 - `ToolRegistry`、`ToolLoader` 与 MCP tools 接入；MCP 支持 stdio、SSE 和 Streamable HTTP。
 - 支持文本流式与非流式调用的 AgentRunner 工具调用循环，以及基于 `asyncio.Queue` 的 MessageBus；流式工具执行前可单独通知调用方工具名称和参数。
 - QQ 文本 Channel、最小 WebSocket Channel，以及独立的 React + TypeScript Web UI；均复用 ChannelManager、Application 生命周期和 `python -m nanobot` CLI 入口。WebSocket 默认仅监听本机，连接后经现有 `MessageBus` 与 AgentLoop 通信；Web UI 可查看、切换和新建本地持久化会话，并可停止当前 session 的流式生成。

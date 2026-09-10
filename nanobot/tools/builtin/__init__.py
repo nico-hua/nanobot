@@ -4,6 +4,7 @@ from .cron import CronTool
 from .exec import ExecTool
 from .filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from .goal import CreateGoalTool, UpdateGoalTool
+from .message import MessageTool
 from .spawn import SpawnTool
 from .web import WebFetchTool, WebSearchTool
 
@@ -13,6 +14,7 @@ __all__ = [
     "EditFileTool",
     "ExecTool",
     "ListDirTool",
+    "MessageTool",
     "ReadFileTool",
     "SpawnTool",
     "UpdateGoalTool",

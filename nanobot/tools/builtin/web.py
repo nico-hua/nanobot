@@ -510,20 +510,22 @@ class WebSearchTool(Tool):
             "include_raw_content": False,
         }
         try:
-            async with self._session_factory(timeout=timeout) as session:
-                async with session.post(
+            async with (
+                self._session_factory(timeout=timeout) as session,
+                session.post(
                     self.TAVILY_SEARCH_URL,
                     headers={
                         "Authorization": f"Bearer {self._tavily_api_key}",
                         "Content-Type": "application/json",
                     },
                     json=request_payload,
-                ) as response:
-                    if not 200 <= response.status < 300:
-                        return _tool_error(
-                            f"Tavily request returned HTTP status {response.status}"
-                        )
-                    response_payload = await response.json()
+                ) as response,
+            ):
+                if not 200 <= response.status < 300:
+                    return _tool_error(
+                        f"Tavily request returned HTTP status {response.status}"
+                    )
+                response_payload = await response.json()
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError:
