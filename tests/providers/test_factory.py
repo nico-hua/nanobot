@@ -54,11 +54,16 @@ class ProviderFactoryTest(unittest.TestCase):
     def test_default_factory_registers_supported_provider_types(self) -> None:
         factory = create_default_provider_factory()
 
-        openai_provider = factory.create(_provider_config(type="openai_compat"))
-        anthropic_provider = factory.create(_provider_config(type="anthropic_compat"))
+        config = _provider_config(request_timeout_seconds=12.5)
+        openai_provider = factory.create(config.model_copy(update={"type": "openai_compat"}))
+        anthropic_provider = factory.create(
+            config.model_copy(update={"type": "anthropic_compat"})
+        )
 
         self.assertIsInstance(openai_provider, OpenAICompatProvider)
         self.assertIsInstance(anthropic_provider, AnthropicCompatProvider)
+        self.assertEqual(openai_provider._request_timeout_seconds, 12.5)
+        self.assertEqual(anthropic_provider._request_timeout_seconds, 12.5)
 
     def test_unknown_provider_type_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported configured provider"):
@@ -72,7 +77,11 @@ class ProviderFactoryTest(unittest.TestCase):
             factory.register("openai_compat", lambda config: StubProvider())
 
 
-def _provider_config(type: str = "openai_compat") -> ProviderConfig:
+def _provider_config(
+    type: str = "openai_compat",
+    *,
+    request_timeout_seconds: float = 60.0,
+) -> ProviderConfig:
     return ProviderConfig(
         type=type,  # type: ignore[arg-type]
         api_key="test-key",
@@ -80,4 +89,5 @@ def _provider_config(type: str = "openai_compat") -> ProviderConfig:
         default_model="test-model",
         default_max_tokens=256,
         default_temperature=0.2,
+        request_timeout_seconds=request_timeout_seconds,
     )

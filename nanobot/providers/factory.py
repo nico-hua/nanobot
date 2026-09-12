@@ -62,4 +62,5 @@ def _provider_options(config: ProviderConfig) -> dict[str, str | int | float]:
         "default_model": config.default_model,
         "default_max_tokens": config.default_max_tokens,
         "default_temperature": config.default_temperature,
+        "request_timeout_seconds": config.request_timeout_seconds,
     }

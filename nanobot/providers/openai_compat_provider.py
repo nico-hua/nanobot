@@ -10,7 +10,13 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from ..tools import Tool
-from .base import LLMProvider, LLMResponse, ProviderError, TokenUsage
+from .base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderError,
+    TokenUsage,
+    await_provider_response,
+)
 from .messages import AIMessage, BaseMessage, ToolCallRequest, ToolMessage
 
 logger = logging.getLogger(__name__)
@@ -26,6 +32,7 @@ class OpenAICompatProvider(LLMProvider):
         default_model: str,
         default_max_tokens: int | None = None,
         default_temperature: float | None = None,
+        request_timeout_seconds: float = 60.0,
         *,
         client: Any | None = None,
     ) -> None:
@@ -33,6 +40,7 @@ class OpenAICompatProvider(LLMProvider):
         self.default_model = default_model
         self.default_max_tokens = default_max_tokens
         self.default_temperature = default_temperature
+        self._request_timeout_seconds = request_timeout_seconds
         self._client = client if client is not None else AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
@@ -54,7 +62,10 @@ class OpenAICompatProvider(LLMProvider):
         )
 
         try:
-            response = await self._client.chat.completions.create(**request)
+            response = await await_provider_response(
+                self._client.chat.completions.create(**request),
+                timeout_seconds=self._request_timeout_seconds,
+            )
             return _response_from_completion(response)
         except ProviderError:
             raise
@@ -79,7 +90,7 @@ class OpenAICompatProvider(LLMProvider):
             len(tools or ()),
         )
 
-        try:
+        async def consume_stream() -> LLMResponse:
             response = await self._client.chat.completions.create(**request)
             content_parts: list[str] = []
             tool_call_parts: dict[int, dict[str, str]] = {}
@@ -116,6 +127,12 @@ class OpenAICompatProvider(LLMProvider):
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
                 usage=usage,
+            )
+
+        try:
+            return await await_provider_response(
+                consume_stream(),
+                timeout_seconds=self._request_timeout_seconds,
             )
         except ProviderError:
             raise

@@ -93,16 +93,22 @@ class ProviderConfigTest(unittest.TestCase):
 
         self.assertEqual(config.default_max_tokens, 1024)
         self.assertEqual(config.default_temperature, 0.7)
+        self.assertEqual(config.request_timeout_seconds, 60.0)
 
-    def test_rejects_temperature_outside_supported_range(self) -> None:
-        with self.assertRaises(ValidationError):
-            ProviderConfig(
-                type="openai_compat",
-                api_key="test-key",
-                api_base="https://example.test/v1",
-                default_model="test-model",
-                default_temperature=2.1,
-            )
+    def test_rejects_invalid_generation_and_request_timeout_settings(self) -> None:
+        for values in (
+            {"default_temperature": 2.1},
+            {"request_timeout_seconds": 0},
+            {"request_timeout_seconds": 601},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValidationError):
+                ProviderConfig(
+                    type="openai_compat",
+                    api_key="test-key",
+                    api_base="https://example.test/v1",
+                    default_model="test-model",
+                    **values,
+                )
 
 
 class ApiConfigTest(unittest.TestCase):

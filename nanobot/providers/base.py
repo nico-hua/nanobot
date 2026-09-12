@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from typing import TypeVar
 
 from ..tools import Tool
 from .messages import BaseMessage, ToolCallRequest
@@ -31,6 +33,30 @@ class LLMResponse:
 
 class ProviderError(Exception):
     """Base error raised when an LLM provider cannot complete a request."""
+
+
+class ProviderTimeoutError(ProviderError):
+    """Raised when one LLM provider request exceeds its configured timeout."""
+
+
+ResponseT = TypeVar("ResponseT")
+
+
+async def await_provider_response(
+    request: Awaitable[ResponseT],
+    *,
+    timeout_seconds: float,
+) -> ResponseT:
+    """Wait for one provider request without changing cancellation semantics."""
+
+    try:
+        return await asyncio.wait_for(request, timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError as error:
+        raise ProviderTimeoutError(
+            f"LLM request timed out after {timeout_seconds:g} seconds"
+        ) from error
 
 
 class LLMProvider(ABC):

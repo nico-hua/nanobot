@@ -9,7 +9,13 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from ..tools import Tool
-from .base import LLMProvider, LLMResponse, ProviderError, TokenUsage
+from .base import (
+    LLMProvider,
+    LLMResponse,
+    ProviderError,
+    TokenUsage,
+    await_provider_response,
+)
 from .messages import (
     AIMessage,
     BaseMessage,
@@ -33,6 +39,7 @@ class AnthropicCompatProvider(LLMProvider):
         default_max_tokens: int = 1024,
         default_thinking: Mapping[str, Any] | None = None,
         default_temperature: float | None = None,
+        request_timeout_seconds: float = 60.0,
         *,
         client: Any | None = None,
     ) -> None:
@@ -43,6 +50,7 @@ class AnthropicCompatProvider(LLMProvider):
             dict(default_thinking) if default_thinking is not None else None
         )
         self.default_temperature = default_temperature
+        self._request_timeout_seconds = request_timeout_seconds
         self._client = client if client is not None else AsyncAnthropic(
             api_key=api_key,
             base_url=api_base,
@@ -64,7 +72,10 @@ class AnthropicCompatProvider(LLMProvider):
         )
 
         try:
-            response = await self._client.messages.create(**request)
+            response = await await_provider_response(
+                self._client.messages.create(**request),
+                timeout_seconds=self._request_timeout_seconds,
+            )
             return _response_from_message(response)
         except ProviderError:
             raise
@@ -88,13 +99,19 @@ class AnthropicCompatProvider(LLMProvider):
             len(tools or ()),
         )
 
-        try:
+        async def consume_stream() -> LLMResponse:
             async with self._client.messages.stream(**request) as stream:
                 async for delta in stream.text_stream:
                     if on_delta is not None:
                         await on_delta(delta)
                 response = await stream.get_final_message()
             return _response_from_message(response)
+
+        try:
+            return await await_provider_response(
+                consume_stream(),
+                timeout_seconds=self._request_timeout_seconds,
+            )
         except ProviderError:
             raise
         except Exception as exc:

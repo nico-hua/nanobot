@@ -1,3 +1,4 @@
+import asyncio
 import json
 import unittest
 from collections.abc import Sequence
@@ -10,6 +11,7 @@ from nanobot.providers import (
     LLMResponse,
     OpenAICompatProvider,
     ProviderError,
+    ProviderTimeoutError,
     SystemMessage,
     TokenUsage,
     ToolCallRequest,
@@ -256,3 +258,109 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ProviderError):
             await provider.complete((HumanMessage(content="hello"),))
+
+    async def test_complete_timeout_is_a_provider_timeout_error(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class BlockingCompletions:
+            async def create(self, **request: Any) -> Any:
+                del request
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=BlockingCompletions())
+        )
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            request_timeout_seconds=0.01,
+            client=client,
+        )
+
+        with self.assertRaisesRegex(
+            ProviderTimeoutError,
+            r"LLM request timed out after 0.01 seconds",
+        ):
+            await provider.complete((HumanMessage(content="hello"),))
+
+        self.assertTrue(started.is_set())
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    async def test_stream_timeout_is_a_provider_timeout_error(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class BlockingStream:
+            def __aiter__(self) -> "BlockingStream":
+                return self
+
+            async def __anext__(self) -> Any:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                raise StopAsyncIteration
+
+        class StreamingCompletions:
+            async def create(self, **request: Any) -> Any:
+                del request
+                return BlockingStream()
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=StreamingCompletions())
+        )
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            request_timeout_seconds=0.01,
+            client=client,
+        )
+
+        with self.assertRaises(ProviderTimeoutError):
+            await provider.stream((HumanMessage(content="hello"),))
+
+        self.assertTrue(started.is_set())
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    async def test_cancellation_is_not_converted_to_a_provider_error(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class BlockingCompletions:
+            async def create(self, **request: Any) -> Any:
+                del request
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=BlockingCompletions())
+        )
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            request_timeout_seconds=1,
+            client=client,
+        )
+        task = asyncio.create_task(provider.complete((HumanMessage(content="hello"),)))
+        await asyncio.wait_for(started.wait(), timeout=1)
+
+        task.cancel()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(cancelled.wait(), timeout=1)

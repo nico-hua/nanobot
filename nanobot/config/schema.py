@@ -84,6 +84,7 @@ class ProviderSettingsConfig(BaseModel):
         le=2,
         validation_alias=AliasChoices("temperature", "default_temperature"),
     )
+    request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
 
     @field_validator("api_base", "default_model")
     @classmethod

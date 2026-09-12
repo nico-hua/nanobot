@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from collections.abc import Sequence
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from nanobot.providers import (
     HumanMessage,
     LLMResponse,
     ProviderError,
+    ProviderTimeoutError,
     SystemMessage,
     TokenUsage,
     ToolCallRequest,
@@ -200,3 +202,87 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(ProviderError):
             await provider.complete((HumanMessage(content="hello"),))
+
+    async def test_complete_timeout_is_a_provider_timeout_error(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class BlockingMessages:
+            async def create(self, **request: Any) -> Any:
+                del request
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+        provider = AnthropicCompatProvider(
+            "test-key",
+            "https://example.test/anthropic",
+            "test-model",
+            request_timeout_seconds=0.01,
+            client=SimpleNamespace(messages=BlockingMessages()),
+        )
+
+        with self.assertRaisesRegex(
+            ProviderTimeoutError,
+            r"LLM request timed out after 0.01 seconds",
+        ):
+            await provider.complete((HumanMessage(content="hello"),))
+
+        self.assertTrue(started.is_set())
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+
+    async def test_stream_timeout_is_a_provider_timeout_error(self) -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class BlockingTextStream:
+            def __aiter__(self) -> "BlockingTextStream":
+                return self
+
+            async def __anext__(self) -> str:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+                raise StopAsyncIteration
+
+        class BlockingMessageStream:
+            text_stream = BlockingTextStream()
+
+            async def __aenter__(self) -> "BlockingMessageStream":
+                return self
+
+            async def __aexit__(
+                self,
+                exc_type: Any,
+                exc_value: Any,
+                traceback: Any,
+            ) -> None:
+                return None
+
+            async def get_final_message(self) -> Any:
+                raise AssertionError("The timed-out stream must not finish")
+
+        class StreamingMessages:
+            def stream(self, **request: Any) -> BlockingMessageStream:
+                del request
+                return BlockingMessageStream()
+
+        provider = AnthropicCompatProvider(
+            "test-key",
+            "https://example.test/anthropic",
+            "test-model",
+            request_timeout_seconds=0.01,
+            client=SimpleNamespace(messages=StreamingMessages()),
+        )
+
+        with self.assertRaises(ProviderTimeoutError):
+            await provider.stream((HumanMessage(content="hello"),))
+
+        self.assertTrue(started.is_set())
+        await asyncio.wait_for(cancelled.wait(), timeout=1)

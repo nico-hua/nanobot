@@ -192,6 +192,7 @@ Provider 层在 **nanobot/providers/**。它只负责将不同模型厂商的请
 | TokenUsage | prompt、completion、total token 计数 |
 | BaseMessage 及 System/Human/AI/Tool 子类 | Provider 适配前后的统一对话消息模型 |
 | ProviderError | Provider 无法完成请求时的统一异常边界 |
+| ProviderTimeoutError | 单次 Provider 请求超过 `provider.request_timeout_seconds` 时的 ProviderError 子类 |
 
 ### Factory 与实现
 
@@ -200,7 +201,7 @@ Provider 层在 **nanobot/providers/**。它只负责将不同模型厂商的请
 - **openai_compat** → **OpenAICompatProvider**
 - **anthropic_compat** → **AnthropicCompatProvider**
 
-它们分别位于 **openai_compat_provider.py** 和 **anthropic_compat_provider.py**，负责 SDK 调用、消息与工具 schema 转换、流式解析和异常封装。AgentRunner 不需要知道 Chat Completions 与 Anthropic Messages 的协议差异。
+它们分别位于 **openai_compat_provider.py** 和 **anthropic_compat_provider.py**，负责 SDK 调用、消息与工具 schema 转换、流式解析、单次请求超时和异常封装。`provider.request_timeout_seconds` 默认 60 秒；每个 `complete()` 或 `stream()` 请求独立受限，超时转为 `ProviderTimeoutError`。这不限制 AgentRunner 的整个工具循环，也不会吞掉外部 `asyncio.CancelledError`。AgentRunner 不需要知道 Chat Completions 与 Anthropic Messages 的协议差异。
 
 ## 5. Tool 系统
 
@@ -430,7 +431,7 @@ App 负责页面级 session 选择、历史加载、输入和滚动；useNanobot
 | logging | nanobot 包日志级别 |
 | api | 本地 HTTP API 监听与请求超时 |
 | auth | 静态 token 开关与 token |
-| provider | Provider 类型、模型、API 地址、密钥与默认生成参数 |
+| provider | Provider 类型、模型、API 地址、密钥、默认生成参数与单次 LLM 请求超时 |
 | tools.web_search | Tavily key |
 | channel | default、qq、websocket 配置 |
 | mcp.servers | MCP server 连接与工具启用配置 |
@@ -489,7 +490,7 @@ HTTP API
 
 | 当前取舍 | 原因与影响 |
 | --- | --- |
-| 没有 Provider retry、fallback 或统一超时策略 | 先展示单次 Provider 调用与错误边界；生产环境仍需重试、熔断、模型切换和成本控制。 |
+| 没有 Provider retry、fallback 或全局 Agent deadline | 当前仅为每次 Provider `complete`/`stream` 调用提供可配置超时；生产环境仍需重试、熔断、模型切换、总请求 deadline 和成本控制。 |
 | 没有跨进程 Session 锁 | 当前单进程 asyncio lock 足够说明顺序语义；多进程需文件锁、数据库事务或分布式协调。 |
 | 没有 Pairing、登录或角色权限 | 当前只有面向本地服务的静态 token，不能当作完整身份授权。 |
 | HTTP API 不完整兼容 OpenAI | 只提供本项目所需消息与 Session 读取接口，未实现 HTTP 流式、完整协议和异步任务查询。 |
@@ -506,7 +507,7 @@ HTTP API
 
 以 [开发进度](DEVELOPMENT_PROGRESS.md) 为准，当前已完成：
 
-- Provider 抽象、OpenAI-compatible 与 Anthropic-compatible 实现、文本流式回调。
+- Provider 抽象、OpenAI-compatible 与 Anthropic-compatible 实现、文本流式回调及单次请求超时。
 - Tool 基础设施、builtin 文件/命令/网络/消息/Goal/Cron/Spawn 工具和 MCP 动态工具。
 - JSONL Session、上下文预算裁剪、Session 摘要、持久化 GoalState。
 - MEMORY.md、持久化记忆事件队列与 cursor 恢复。

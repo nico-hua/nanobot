@@ -3,6 +3,7 @@ from .base import (
     LLMProvider,
     LLMResponse,
     ProviderError,
+    ProviderTimeoutError,
     TokenUsage,
 )
 from .factory import ProviderFactory, create_default_provider_factory
@@ -29,6 +30,7 @@ __all__ = [
     "MessageRole",
     "OpenAICompatProvider",
     "ProviderError",
+    "ProviderTimeoutError",
     "ProviderFactory",
     "SystemMessage",
     "TokenUsage",

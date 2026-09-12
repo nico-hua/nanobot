@@ -122,6 +122,11 @@
 - [x] 新增 `apply_patch`：仅接受明确的 `*** Begin Patch` / `*** End Patch` 结构化补丁，支持 `Add File`、带精确唯一上下文 hunk 的 `Update File` 与 `Delete File`。所有变更会先在内存中解析和验证；再以同目录临时文件、替换与备份回滚提交，避免格式错误、上下文缺失/歧义或多文件写入失败时留下部分修改。仅处理 workspace 内的 UTF-8 文本，不实现二进制修改、模糊匹配或 Git diff 完整兼容。
 - [x] 为上述文件工具补充隔离测试，覆盖 glob/正则匹配、输出限制、UTF-8、路径与符号链接边界，以及多文件补丁回滚；最新完整离线测试为 `500 passed, 10 skipped`。
 
+### 2026-09-12
+
+- [x] 为 Provider 增加单次 LLM 请求超时：`provider.request_timeout_seconds` 默认 60 秒，`ProviderFactory` 将其传入 OpenAI-compatible 与 Anthropic-compatible Provider。每个 `complete()` 或 `stream()` 调用独立计时；stream 的边界包含建立流、读取增量与获得最终响应，但不覆盖 AgentRunner 的工具循环或后续模型轮次。
+- [x] 新增 `ProviderTimeoutError`（`ProviderError` 子类）作为统一超时错误，保留既有 Provider 异常契约，不将错误伪装为成功的 `LLMResponse`；外部 `asyncio.CancelledError` 原样传播。补充正常、非流式超时、流式超时、取消与 Factory 配置传递测试；最新完整离线测试为 `506 passed, 10 skipped`。
+
 ## 待开发功能
 
 ### 核心开发工具
