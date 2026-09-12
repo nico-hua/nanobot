@@ -13,7 +13,6 @@ from nanobot.providers import (
     HumanMessage,
     LLMProvider,
     LLMResponse,
-    ProviderTimeoutError,
     TokenUsage,
     ToolCallRequest,
     ToolMessage,
@@ -165,26 +164,34 @@ class AgentRunnerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tool.calls, [])
         self.assertEqual(provider.complete_calls, [(messages, (tool,))])
 
-    async def test_propagates_a_provider_timeout_error(self) -> None:
-        class TimedOutProvider(ScriptedProvider):
-            async def complete(
-                self,
-                messages: Sequence[BaseMessage],
-                tools: Sequence[Tool] | None = None,
-                max_tokens: int | None = None,
-                temperature: float | None = None,
-            ) -> LLMResponse:
-                del messages, tools, max_tokens, temperature
-                raise ProviderTimeoutError("LLM request timed out after 1 seconds")
-
-        with self.assertRaises(ProviderTimeoutError):
-            await AgentRunner().run(
-                AgentRunSpec(
-                    messages=(HumanMessage(content="Respond."),),
-                    provider=TimedOutProvider(()),
-                    tool_registry=ToolRegistry(),
-                )
+    async def test_stops_immediately_when_the_provider_returns_an_error(self) -> None:
+        request = tool_call("call-1", "record", value="Beijing")
+        provider = ScriptedProvider(
+            (
+                LLMResponse(
+                    content="This text must not become an assistant message.",
+                    tool_calls=(request,),
+                    error="LLM provider connection failed.",
+                ),
             )
+        )
+        tool = RecordingTool()
+        messages = (HumanMessage(content="Respond."),)
+
+        result = await AgentRunner().run(
+            AgentRunSpec(
+                messages=messages,
+                provider=provider,
+                tool_registry=ToolRegistry((tool,)),
+            )
+        )
+
+        self.assertIsNone(result.content)
+        self.assertEqual(result.error, "LLM provider connection failed.")
+        self.assertEqual(result.stop_reason, "error")
+        self.assertEqual(result.messages, messages)
+        self.assertEqual(result.tools_used, ())
+        self.assertEqual(tool.calls, [])
 
     async def test_stream_forwards_text_deltas_and_returns_provider_response(
         self,

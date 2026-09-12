@@ -11,8 +11,6 @@ from nanobot.providers import (
     AnthropicCompatProvider,
     HumanMessage,
     LLMResponse,
-    ProviderError,
-    ProviderTimeoutError,
     SystemMessage,
     TokenUsage,
     ToolCallRequest,
@@ -200,10 +198,12 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(messages=FailingMessages())
         provider = AnthropicCompatProvider("test-key", "https://example.test/anthropic", "test-model", client=client)
 
-        with self.assertRaises(ProviderError):
-            await provider.complete((HumanMessage(content="hello"),))
+        response = await provider.complete((HumanMessage(content="hello"),))
 
-    async def test_complete_timeout_is_a_provider_timeout_error(self) -> None:
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM provider request failed.")
+
+    async def test_complete_timeout_becomes_an_error_response(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -222,19 +222,18 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
             "https://example.test/anthropic",
             "test-model",
             request_timeout_seconds=0.01,
+            max_retries=0,
             client=SimpleNamespace(messages=BlockingMessages()),
         )
 
-        with self.assertRaisesRegex(
-            ProviderTimeoutError,
-            r"LLM request timed out after 0.01 seconds",
-        ):
-            await provider.complete((HumanMessage(content="hello"),))
+        response = await provider.complete((HumanMessage(content="hello"),))
 
         self.assertTrue(started.is_set())
         await asyncio.wait_for(cancelled.wait(), timeout=1)
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM request timed out after 0.01 seconds.")
 
-    async def test_stream_timeout_is_a_provider_timeout_error(self) -> None:
+    async def test_stream_timeout_becomes_an_error_response(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -278,11 +277,13 @@ class AnthropicCompatProviderTest(unittest.IsolatedAsyncioTestCase):
             "https://example.test/anthropic",
             "test-model",
             request_timeout_seconds=0.01,
+            max_retries=0,
             client=SimpleNamespace(messages=StreamingMessages()),
         )
 
-        with self.assertRaises(ProviderTimeoutError):
-            await provider.stream((HumanMessage(content="hello"),))
+        response = await provider.stream((HumanMessage(content="hello"),))
 
         self.assertTrue(started.is_set())
         await asyncio.wait_for(cancelled.wait(), timeout=1)
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM request timed out after 0.01 seconds.")

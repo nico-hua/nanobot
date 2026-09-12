@@ -97,6 +97,33 @@ class ToolCallingStreamingProvider(LLMProvider):
         return LLMResponse(content="Done.", finish_reason="stop")
 
 
+class ErrorStreamingProvider(LLMProvider):
+    """Emit one visible delta, then return a normalized Provider error."""
+
+    async def complete(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        raise AssertionError("Provider error streaming test must not use completion")
+
+    async def stream(
+        self,
+        messages: Sequence[BaseMessage],
+        tools: Sequence[Tool] | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        on_delta: Callable[[str], Awaitable[None]] | None = None,
+    ) -> LLMResponse:
+        del messages, tools, max_tokens, temperature
+        if on_delta is not None:
+            await on_delta("Partial reply.")
+        return LLMResponse(error="LLM provider connection failed.")
+
+
 class BlockingStreamingProvider(LLMProvider):
     """A stream that emits one delta and waits until AgentLoop cancels it."""
 
@@ -262,6 +289,25 @@ class AgentLoopStreamingTest(unittest.IsolatedAsyncioTestCase):
                 AIMessage(content="First second."),
             ),
         )
+
+    async def test_streaming_provider_error_ends_with_one_error_event_without_persisting(self) -> None:
+        bus = MessageBus()
+        loop = self._loop(ErrorStreamingProvider(), message_bus=bus)
+
+        response = await loop.process_inbound(
+            self._inbound("Streaming request.", metadata={"streaming": True})
+        )
+
+        delta = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        error = await asyncio.wait_for(bus.consume_outbound(), timeout=1)
+        self.assertIsNone(response)
+        self.assertEqual(delta.content, "Partial reply.")
+        self.assertEqual(delta.metadata["event"], "delta")
+        self.assertEqual(error.content, "LLM provider connection failed.")
+        self.assertEqual(error.metadata["event"], "error")
+        self.assertEqual(loop._session_manager.get_or_create("session-1").messages, ())
+        with self.assertRaises(TimeoutError):
+            await asyncio.wait_for(bus.consume_outbound(), timeout=0.05)
 
     async def test_streaming_publishes_tool_call_before_text_and_turn_end(self) -> None:
         request = ToolCallRequest(

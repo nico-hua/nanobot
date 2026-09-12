@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
@@ -12,9 +13,11 @@ from ..tools import Tool
 from .base import (
     LLMProvider,
     LLMResponse,
+    ProviderCallbackError,
     ProviderError,
     TokenUsage,
-    await_provider_response,
+    is_transient_provider_error,
+    run_provider_request,
 )
 from .messages import (
     AIMessage,
@@ -40,6 +43,7 @@ class AnthropicCompatProvider(LLMProvider):
         default_thinking: Mapping[str, Any] | None = None,
         default_temperature: float | None = None,
         request_timeout_seconds: float = 60.0,
+        max_retries: int = 2,
         *,
         client: Any | None = None,
     ) -> None:
@@ -51,9 +55,12 @@ class AnthropicCompatProvider(LLMProvider):
         )
         self.default_temperature = default_temperature
         self._request_timeout_seconds = request_timeout_seconds
+        self._max_retries = max_retries
         self._client = client if client is not None else AsyncAnthropic(
             api_key=api_key,
             base_url=api_base,
+            # Keep the retry budget in the shared Provider wrapper.
+            max_retries=0,
         )
 
     async def complete(
@@ -71,17 +78,15 @@ class AnthropicCompatProvider(LLMProvider):
             len(tools or ()),
         )
 
-        try:
-            response = await await_provider_response(
-                self._client.messages.create(**request),
-                timeout_seconds=self._request_timeout_seconds,
-            )
+        async def request_once() -> LLMResponse:
+            response = await self._client.messages.create(**request)
             return _response_from_message(response)
-        except ProviderError:
-            raise
-        except Exception as exc:
-            logger.exception("Anthropic-compatible completion failed")
-            raise ProviderError("Anthropic-compatible completion failed") from exc
+
+        return await run_provider_request(
+            request_once,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+        )
 
     async def stream(
         self,
@@ -99,24 +104,35 @@ class AnthropicCompatProvider(LLMProvider):
             len(tools or ()),
         )
 
+        output_started = False
+
         async def consume_stream() -> LLMResponse:
+            nonlocal output_started
             async with self._client.messages.stream(**request) as stream:
                 async for delta in stream.text_stream:
                     if on_delta is not None:
-                        await on_delta(delta)
+                        # Do not retry after the caller may have observed a
+                        # delta, including when the callback itself fails.
+                        output_started = True
+                        try:
+                            await on_delta(delta)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as error:
+                            raise ProviderCallbackError(
+                                "LLM stream callback failed"
+                            ) from error
                 response = await stream.get_final_message()
             return _response_from_message(response)
 
-        try:
-            return await await_provider_response(
-                consume_stream(),
-                timeout_seconds=self._request_timeout_seconds,
-            )
-        except ProviderError:
-            raise
-        except Exception as exc:
-            logger.exception("Anthropic-compatible streaming failed")
-            raise ProviderError("Anthropic-compatible streaming failed") from exc
+        return await run_provider_request(
+            consume_stream,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+            can_retry=lambda error: (
+                not output_started and is_transient_provider_error(error)
+            ),
+        )
 
     def _build_request(
         self,

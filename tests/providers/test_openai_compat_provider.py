@@ -4,14 +4,13 @@ import unittest
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from nanobot.providers import (
     AIMessage,
     HumanMessage,
     LLMResponse,
     OpenAICompatProvider,
-    ProviderError,
-    ProviderTimeoutError,
     SystemMessage,
     TokenUsage,
     ToolCallRequest,
@@ -256,10 +255,12 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
         client = SimpleNamespace(chat=SimpleNamespace(completions=FailingCompletions()))
         provider = OpenAICompatProvider("test-key", "https://example.test/v1", "test-model", client=client)
 
-        with self.assertRaises(ProviderError):
-            await provider.complete((HumanMessage(content="hello"),))
+        response = await provider.complete((HumanMessage(content="hello"),))
 
-    async def test_complete_timeout_is_a_provider_timeout_error(self) -> None:
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM provider request failed.")
+
+    async def test_complete_timeout_becomes_an_error_response(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -281,19 +282,18 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
             "https://example.test/v1",
             "test-model",
             request_timeout_seconds=0.01,
+            max_retries=0,
             client=client,
         )
 
-        with self.assertRaisesRegex(
-            ProviderTimeoutError,
-            r"LLM request timed out after 0.01 seconds",
-        ):
-            await provider.complete((HumanMessage(content="hello"),))
+        response = await provider.complete((HumanMessage(content="hello"),))
 
         self.assertTrue(started.is_set())
         await asyncio.wait_for(cancelled.wait(), timeout=1)
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM request timed out after 0.01 seconds.")
 
-    async def test_stream_timeout_is_a_provider_timeout_error(self) -> None:
+    async def test_stream_timeout_becomes_an_error_response(self) -> None:
         started = asyncio.Event()
         cancelled = asyncio.Event()
 
@@ -323,14 +323,165 @@ class OpenAICompatProviderTest(unittest.IsolatedAsyncioTestCase):
             "https://example.test/v1",
             "test-model",
             request_timeout_seconds=0.01,
+            max_retries=0,
             client=client,
         )
 
-        with self.assertRaises(ProviderTimeoutError):
-            await provider.stream((HumanMessage(content="hello"),))
+        response = await provider.stream((HumanMessage(content="hello"),))
 
         self.assertTrue(started.is_set())
         await asyncio.wait_for(cancelled.wait(), timeout=1)
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM request timed out after 0.01 seconds.")
+
+    async def test_stream_retries_before_any_delta(self) -> None:
+        chunk = SimpleNamespace(
+            choices=(
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Recovered.", tool_calls=()),
+                    finish_reason="stop",
+                ),
+            ),
+            usage=None,
+        )
+
+        class RetryingCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def create(self, **request: Any) -> Any:
+                self.calls += 1
+                if request.get("stream") is not True:
+                    raise AssertionError("Expected streaming request")
+                if self.calls == 1:
+                    raise ConnectionError()
+                return FakeStream((chunk,))
+
+        completions = RetryingCompletions()
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            max_retries=1,
+            client=client,
+        )
+        deltas: list[str] = []
+
+        async def on_delta(delta: str) -> None:
+            deltas.append(delta)
+
+        async def no_wait(delay: float) -> None:
+            self.assertEqual(delay, 1)
+
+        with patch("nanobot.providers.base.asyncio.sleep", new=no_wait):
+            response = await provider.stream(
+                (HumanMessage(content="hello"),),
+                on_delta=on_delta,
+            )
+
+        self.assertEqual(completions.calls, 2)
+        self.assertEqual(deltas, ["Recovered."])
+        self.assertEqual(response.content, "Recovered.")
+        self.assertIsNone(response.error)
+
+    async def test_stream_does_not_retry_after_a_delta(self) -> None:
+        chunk = SimpleNamespace(
+            choices=(
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Partial", tool_calls=()),
+                    finish_reason=None,
+                ),
+            ),
+            usage=None,
+        )
+
+        class PartiallyFailingStream:
+            def __init__(self) -> None:
+                self._returned_chunk = False
+
+            def __aiter__(self) -> "PartiallyFailingStream":
+                return self
+
+            async def __anext__(self) -> Any:
+                if not self._returned_chunk:
+                    self._returned_chunk = True
+                    return chunk
+                raise ConnectionError()
+
+        class FailingAfterDeltaCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def create(self, **request: Any) -> Any:
+                self.calls += 1
+                return PartiallyFailingStream()
+
+        completions = FailingAfterDeltaCompletions()
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            max_retries=2,
+            client=client,
+        )
+        deltas: list[str] = []
+
+        async def on_delta(delta: str) -> None:
+            deltas.append(delta)
+
+        response = await provider.stream(
+            (HumanMessage(content="hello"),),
+            on_delta=on_delta,
+        )
+
+        self.assertEqual(completions.calls, 1)
+        self.assertEqual(deltas, ["Partial"])
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM provider connection failed.")
+
+    async def test_stream_callback_failure_is_not_retried(self) -> None:
+        chunk = SimpleNamespace(
+            choices=(
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="Visible", tool_calls=()),
+                    finish_reason=None,
+                ),
+            ),
+            usage=None,
+        )
+
+        class OneChunkCompletions:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def create(self, **request: Any) -> Any:
+                del request
+                self.calls += 1
+                return FakeStream((chunk,))
+
+        completions = OneChunkCompletions()
+        provider = OpenAICompatProvider(
+            "test-key",
+            "https://example.test/v1",
+            "test-model",
+            max_retries=2,
+            client=SimpleNamespace(chat=SimpleNamespace(completions=completions)),
+        )
+
+        async def disconnected_client(delta: str) -> None:
+            del delta
+            raise RuntimeError("client disconnected")
+
+        response = await provider.stream(
+            (HumanMessage(content="hello"),),
+            on_delta=disconnected_client,
+        )
+
+        self.assertEqual(completions.calls, 1)
+        self.assertEqual(response.finish_reason, "error")
+        self.assertEqual(response.error, "LLM streaming output could not be delivered.")
 
     async def test_cancellation_is_not_converted_to_a_provider_error(self) -> None:
         started = asyncio.Event()

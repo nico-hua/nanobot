@@ -58,6 +58,7 @@ class ConfigLoaderTest(unittest.TestCase):
                             "max_tokens": 64,
                             "temperature": 0.3,
                             "request_timeout_seconds": 12.5,
+                            "max_retries": 1,
                         },
                         "mcp": {
                             "servers": {
@@ -89,6 +90,7 @@ class ConfigLoaderTest(unittest.TestCase):
         self.assertEqual(config.provider.default_max_tokens, 64)
         self.assertEqual(config.provider.default_temperature, 0.3)
         self.assertEqual(config.provider.request_timeout_seconds, 12.5)
+        self.assertEqual(config.provider.max_retries, 1)
         self.assertIsNotNone(config.qq)
         self.assertEqual(config.qq.allow_from if config.qq else None, ["user-1", "user-2"])
         self.assertTrue(config.qq.streaming if config.qq else False)

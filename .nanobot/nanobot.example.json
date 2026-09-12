@@ -23,6 +23,7 @@
   },
   "provider": {
     "request_timeout_seconds": 60,
+    "max_retries": 2,
     "type": "openai_compat",
     "api_key": "",
     "api_base": "https://api.deepseek.com",

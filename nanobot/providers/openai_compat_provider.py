@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -13,9 +14,11 @@ from ..tools import Tool
 from .base import (
     LLMProvider,
     LLMResponse,
+    ProviderCallbackError,
     ProviderError,
     TokenUsage,
-    await_provider_response,
+    is_transient_provider_error,
+    run_provider_request,
 )
 from .messages import AIMessage, BaseMessage, ToolCallRequest, ToolMessage
 
@@ -33,6 +36,7 @@ class OpenAICompatProvider(LLMProvider):
         default_max_tokens: int | None = None,
         default_temperature: float | None = None,
         request_timeout_seconds: float = 60.0,
+        max_retries: int = 2,
         *,
         client: Any | None = None,
     ) -> None:
@@ -41,9 +45,13 @@ class OpenAICompatProvider(LLMProvider):
         self.default_max_tokens = default_max_tokens
         self.default_temperature = default_temperature
         self._request_timeout_seconds = request_timeout_seconds
+        self._max_retries = max_retries
         self._client = client if client is not None else AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
+            # SDK retries would make the configured request count ambiguous;
+            # all retries go through ``run_provider_request`` instead.
+            max_retries=0,
         )
 
     async def complete(
@@ -61,17 +69,15 @@ class OpenAICompatProvider(LLMProvider):
             len(tools or ()),
         )
 
-        try:
-            response = await await_provider_response(
-                self._client.chat.completions.create(**request),
-                timeout_seconds=self._request_timeout_seconds,
-            )
+        async def request_once() -> LLMResponse:
+            response = await self._client.chat.completions.create(**request)
             return _response_from_completion(response)
-        except ProviderError:
-            raise
-        except Exception as exc:
-            logger.exception("OpenAI-compatible completion failed")
-            raise ProviderError("OpenAI-compatible completion failed") from exc
+
+        return await run_provider_request(
+            request_once,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+        )
 
     async def stream(
         self,
@@ -90,7 +96,10 @@ class OpenAICompatProvider(LLMProvider):
             len(tools or ()),
         )
 
+        output_started = False
+
         async def consume_stream() -> LLMResponse:
+            nonlocal output_started
             response = await self._client.chat.completions.create(**request)
             content_parts: list[str] = []
             tool_call_parts: dict[int, dict[str, str]] = {}
@@ -113,7 +122,17 @@ class OpenAICompatProvider(LLMProvider):
                 if content:
                     content_parts.append(content)
                     if on_delta is not None:
-                        await on_delta(content)
+                        # Treat a failed presentation callback as terminal,
+                        # not as a transient model transport failure.
+                        output_started = True
+                        try:
+                            await on_delta(content)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as error:
+                            raise ProviderCallbackError(
+                                "LLM stream callback failed"
+                            ) from error
 
                 for tool_call in getattr(delta, "tool_calls", None) or ():
                     _append_tool_call(tool_call_parts, tool_call)
@@ -129,16 +148,14 @@ class OpenAICompatProvider(LLMProvider):
                 usage=usage,
             )
 
-        try:
-            return await await_provider_response(
-                consume_stream(),
-                timeout_seconds=self._request_timeout_seconds,
-            )
-        except ProviderError:
-            raise
-        except Exception as exc:
-            logger.exception("OpenAI-compatible streaming failed")
-            raise ProviderError("OpenAI-compatible streaming failed") from exc
+        return await run_provider_request(
+            consume_stream,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+            can_retry=lambda error: (
+                not output_started and is_transient_provider_error(error)
+            ),
+        )
 
     def _build_request(
         self,

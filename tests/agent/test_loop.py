@@ -498,6 +498,34 @@ class AgentLoopTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_provider_error_sends_one_reply_without_persisting_the_turn(self) -> None:
+        previous_history = (HumanMessage(content="Previous question."),)
+        self._sessions.save(
+            self._sessions.get_or_create("session-1").with_messages(previous_history)
+        )
+        provider = ScriptedProvider(
+            (LLMResponse(error="LLM provider connection failed."),)
+        )
+        loop = AgentLoop(
+            AgentRunner(),
+            provider,
+            ToolRegistry(),
+            self._sessions,
+            _context_builder(self._temporary_directory.name),
+        )
+
+        response = await _dispatch(
+            loop,
+            "New question.",
+            "test",
+            "chat-1",
+            "session-1",
+        )
+
+        self.assertEqual(response.content, "LLM provider connection failed.")
+        self.assertEqual(self._sessions.get_or_create("session-1").messages, previous_history)
+        self.assertEqual(len(provider.complete_calls), 1)
+
     async def test_rebuilds_the_system_prompt_for_each_request(self) -> None:
         soul_path = Path(self._temporary_directory.name) / "SOUL.md"
         soul_path.write_text("First style.", encoding="utf-8")

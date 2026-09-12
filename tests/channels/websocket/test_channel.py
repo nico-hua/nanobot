@@ -300,6 +300,34 @@ class WebSocketChannelTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TimeoutError):
             await asyncio.wait_for(socket.receive(), timeout=0.05)
 
+    async def test_provider_error_outbound_message_uses_an_error_event(self) -> None:
+        bus = MessageBus()
+        channel = await self._start_channel(bus)
+        socket = await self._connect(channel)
+        await socket.receive_json(timeout=1)
+        await self._send_client_message(socket, "chat-1", "session-1", "Hello")
+        await bus.consume_inbound()
+
+        await channel.send(
+            OutboundMessage(
+                channel="websocket",
+                chat_id="chat-1",
+                sender_id="websocket",
+                session_id="session-1",
+                content="LLM provider connection failed.",
+                metadata={"event": "error"},
+            )
+        )
+
+        self.assertEqual(
+            await socket.receive_json(timeout=1),
+            {
+                "type": "error",
+                "code": "agent_error",
+                "message": "LLM provider connection failed.",
+            },
+        )
+
     async def test_tool_call_outbound_message_uses_a_tool_call_event(self) -> None:
         bus = MessageBus()
         channel = await self._start_channel(bus)

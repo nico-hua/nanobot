@@ -3,6 +3,7 @@ from .base import (
     LLMProvider,
     LLMResponse,
     ProviderError,
+    ProviderTransientError,
     ProviderTimeoutError,
     TokenUsage,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "MessageRole",
     "OpenAICompatProvider",
     "ProviderError",
+    "ProviderTransientError",
     "ProviderTimeoutError",
     "ProviderFactory",
     "SystemMessage",

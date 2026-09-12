@@ -520,6 +520,22 @@ class AgentLoop:
                         if is_streaming
                         else self._runner.run(spec)
                     )
+                if result.error is not None:
+                    # Do not persist the current user message or any local
+                    # tool batch when the Provider did not finish the turn.
+                    error_response = _outbound_message(
+                        inbound,
+                        result.error,
+                        metadata=(
+                            {**inbound.metadata, "event": "error"}
+                            if is_streaming and on_delta is not None
+                            else None
+                        ),
+                    )
+                    if is_streaming and on_delta is not None:
+                        await message_bus.publish_outbound(error_response)
+                        return None
+                    return error_response
                 completed_messages = _without_system_messages(
                     result.messages[len(spec.messages) :]
                 )

@@ -94,12 +94,14 @@ class ProviderConfigTest(unittest.TestCase):
         self.assertEqual(config.default_max_tokens, 1024)
         self.assertEqual(config.default_temperature, 0.7)
         self.assertEqual(config.request_timeout_seconds, 60.0)
+        self.assertEqual(config.max_retries, 2)
 
     def test_rejects_invalid_generation_and_request_timeout_settings(self) -> None:
         for values in (
             {"default_temperature": 2.1},
             {"request_timeout_seconds": 0},
             {"request_timeout_seconds": 601},
+            {"max_retries": -1},
         ):
             with self.subTest(values=values), self.assertRaises(ValidationError):
                 ProviderConfig(

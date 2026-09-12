@@ -203,6 +203,13 @@ class WebSocketChannel(BaseChannel):
                     },
                 )
                 return
+            if event == "error":
+                await self._send_error(
+                    connection,
+                    "agent_error",
+                    message.content,
+                )
+                return
             if event is None or event == "message":
                 await self._send_event(
                     connection,

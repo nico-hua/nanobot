@@ -151,7 +151,7 @@ CommandRouter 在调用 Runner 前拦截斜杠命令。普通消息由 ContextBu
 
 ### 3.3 AgentRunner 的工具循环
 
-**AgentRunSpec** 包含消息、Provider、ToolRegistry、最大迭代次数、被禁用工具名、流式回调和可选 Goal 注入回调。**AgentRunResult** 包含最终文本、完整新增消息序列、已使用工具、累计 TokenUsage 与 stop_reason。
+**AgentRunSpec** 包含消息、Provider、ToolRegistry、最大迭代次数、被禁用工具名、流式回调和可选 Goal 注入回调。**AgentRunResult** 包含最终文本、完整新增消息序列、已使用工具、累计 TokenUsage、stop_reason 与可选 error；Provider 请求失败时，error 带有安全的用户可见原因，新增消息序列保持为空。
 
 每次迭代遵循以下顺序：
 
@@ -163,6 +163,8 @@ CommandRouter 在调用 Runner 前拦截斜杠命令。普通消息由 ContextBu
 
 达到 max_iterations 时，Runner 返回 stop_reason 为 **max_iterations** 的正常结果，不会抛出未处理异常或制造半截消息链。AgentLoop 决定普通会话提示达到上限，还是 Goal 创建 continuation。
 
+若 Provider 返回 `LLMResponse.error`，Runner 会立即返回 `AgentRunResult.error`：不执行工具、不追加 assistant/tool 消息、不进入最终化请求，也不触发后续 Goal continuation。
+
 ### 3.4 运行模式
 
 | 场景 | AgentLoop 行为 | AgentRunner 行为 | 结果处理 |
@@ -171,6 +173,7 @@ CommandRouter 在调用 Runner 前拦截斜杠命令。普通消息由 ContextBu
 | WebSocket 流式 turn | 增加 delta/tool_call 回调 | stream 与同一工具循环 | delta/tool_call 后一次 turn_end |
 | Goal turn | source 为 goal，启用队列和权限限制 | 工具批次边界可注入用户输入 | 更新 GoalState，必要时继续 |
 | /stop | 不等待 session 锁 | 取消对应 asyncio task | 流式发送 cancelled turn_end，不保存不完整 turn |
+| Provider 错误 | 不执行工具或后续模型调用 | 返回 `AgentRunResult.error` | 非流式发送一条错误消息；流式发送一次 `event="error"` |
 
 取消不是只改变前端 loading 状态。AgentLoop 按 session 定位任务并取消；由于 Session 只在 Runner 成功返回后写入，取消中的 user、tool call、tool result 不会留下不完整持久化链。
 
@@ -187,11 +190,12 @@ Provider 层在 **nanobot/providers/**。它只负责将不同模型厂商的请
 
 | 对象 | 职责 |
 | --- | --- |
-| LLMResponse | 单次响应的文本、工具调用、结束原因、token 用量 |
+| LLMResponse | 单次响应的文本、工具调用、结束原因、token 用量与可选 `error` |
 | ToolCallRequest | 模型要求执行的工具 ID、名称和参数 |
 | TokenUsage | prompt、completion、total token 计数 |
 | BaseMessage 及 System/Human/AI/Tool 子类 | Provider 适配前后的统一对话消息模型 |
 | ProviderError | Provider 无法完成请求时的统一异常边界 |
+| ProviderTransientError | 明确标记可由共享重试包装层重试的 Provider 错误 |
 | ProviderTimeoutError | 单次 Provider 请求超过 `provider.request_timeout_seconds` 时的 ProviderError 子类 |
 
 ### Factory 与实现
@@ -201,7 +205,7 @@ Provider 层在 **nanobot/providers/**。它只负责将不同模型厂商的请
 - **openai_compat** → **OpenAICompatProvider**
 - **anthropic_compat** → **AnthropicCompatProvider**
 
-它们分别位于 **openai_compat_provider.py** 和 **anthropic_compat_provider.py**，负责 SDK 调用、消息与工具 schema 转换、流式解析、单次请求超时和异常封装。`provider.request_timeout_seconds` 默认 60 秒；每个 `complete()` 或 `stream()` 请求独立受限，超时转为 `ProviderTimeoutError`。这不限制 AgentRunner 的整个工具循环，也不会吞掉外部 `asyncio.CancelledError`。AgentRunner 不需要知道 Chat Completions 与 Anthropic Messages 的协议差异。
+它们分别位于 **openai_compat_provider.py** 和 **anthropic_compat_provider.py**，负责 SDK 调用、消息与工具 schema 转换、流式解析和异常封装。Provider 基类的共享调用包装层负责每次尝试的 `provider.request_timeout_seconds`（默认 60 秒）和有限 transient retry：`provider.max_retries` 默认 2，代表一次请求最多总计 3 次尝试，等待 1、2 秒。它仅重试 timeout、连接错误、HTTP 429/5xx 与显式 `ProviderTransientError`；兼容 SDK 的内置重试被关闭，避免重试预算叠加。最终失败转换为 `LLMResponse(error=..., finish_reason="error")`，而 `asyncio.CancelledError` 必须继续向上抛出。流式请求仅在尚未向外发布 delta 时重试；一旦已有可见输出，后续错误不会重放已发送文本。Provider 不决定上下文结构、工具循环或 Session 写入，AgentRunner 也不需要知道 Chat Completions 与 Anthropic Messages 的协议差异。
 
 ## 5. Tool 系统
 
@@ -431,7 +435,7 @@ App 负责页面级 session 选择、历史加载、输入和滚动；useNanobot
 | logging | nanobot 包日志级别 |
 | api | 本地 HTTP API 监听与请求超时 |
 | auth | 静态 token 开关与 token |
-| provider | Provider 类型、模型、API 地址、密钥、默认生成参数与单次 LLM 请求超时 |
+| provider | Provider 类型、模型、API 地址、密钥、默认生成参数、单次 LLM 请求超时与最大重试次数 |
 | tools.web_search | Tavily key |
 | channel | default、qq、websocket 配置 |
 | mcp.servers | MCP server 连接与工具启用配置 |
@@ -472,10 +476,10 @@ HTTP API
 继续开发时必须保持以下约束：
 
 1. **工具消息顺序完整。** 每个 AIMessage 的 tool_calls 必须有按顺序追加的 ToolMessage；Goal 用户输入只能在完整工具批次后注入。
-2. **Session 不保存不完整 turn。** AgentLoop 只在 AgentRunner 返回后保存 user、assistant、tool 消息；取消、异常和未完成工具批次不落盘。
+2. **Session 不保存不完整 turn。** AgentLoop 只在 AgentRunner 返回后保存 user、assistant、tool 消息；取消、Provider 错误和未完成工具批次不落盘。
 3. **system prompt 不写入 Session。** system prompt、长期记忆、Skills 和摘要都是每次请求重建的上下文。
 4. **同一 Session 串行。** 普通 turn 的读历史、模型调用和保存受同一 session lock 保护；不同 session 不得混入消息。
-5. **流式事件有序且一次收束。** delta/tool_call 用 await 发布；正常流式 turn 只发一次 turn_end，取消只发一次 cancelled turn_end。
+5. **流式事件有序且一次收束。** delta/tool_call 用 await 发布；正常流式 turn 只发一次 turn_end，取消只发一次 cancelled turn_end；Provider 错误只发一次 `event="error"`，不伪造 turn_end。
 6. **AgentLoop 不依赖具体 Channel。** 它只处理消息对象和 MessageBus；新增 Channel 不应改写它的核心逻辑。
 7. **Tool 不依赖具体 Channel。** 主动消息也经 MessageBus 投递，不直接调用 QQ SDK 或 WebSocket。
 8. **Goal 权限按 Session 隔离。** Goal 模式禁用 create_goal，普通模式禁用 update_goal；/goal stop 必须保存终态并取消任务。
@@ -490,7 +494,7 @@ HTTP API
 
 | 当前取舍 | 原因与影响 |
 | --- | --- |
-| 没有 Provider retry、fallback 或全局 Agent deadline | 当前仅为每次 Provider `complete`/`stream` 调用提供可配置超时；生产环境仍需重试、熔断、模型切换、总请求 deadline 和成本控制。 |
+| 仅有有限 Provider retry，没有 fallback、Retry-After、熔断或全局 Agent deadline | 当前为每次 Provider `complete`/`stream` 尝试提供可配置超时和受控 transient retry；生产环境仍需容量信号、熔断、模型切换、总请求 deadline 和成本控制。 |
 | 没有跨进程 Session 锁 | 当前单进程 asyncio lock 足够说明顺序语义；多进程需文件锁、数据库事务或分布式协调。 |
 | 没有 Pairing、登录或角色权限 | 当前只有面向本地服务的静态 token，不能当作完整身份授权。 |
 | HTTP API 不完整兼容 OpenAI | 只提供本项目所需消息与 Session 读取接口，未实现 HTTP 流式、完整协议和异步任务查询。 |
@@ -507,7 +511,7 @@ HTTP API
 
 以 [开发进度](DEVELOPMENT_PROGRESS.md) 为准，当前已完成：
 
-- Provider 抽象、OpenAI-compatible 与 Anthropic-compatible 实现、文本流式回调及单次请求超时。
+- Provider 抽象、OpenAI-compatible 与 Anthropic-compatible 实现、文本流式回调、单次请求超时、有限 transient retry 与统一错误结果。
 - Tool 基础设施、builtin 文件/命令/网络/消息/Goal/Cron/Spawn 工具和 MCP 动态工具。
 - JSONL Session、上下文预算裁剪、Session 摘要、持久化 GoalState。
 - MEMORY.md、持久化记忆事件队列与 cursor 恢复。
@@ -517,7 +521,7 @@ HTTP API
 - QQ Channel、静态认证和流式协议的 WebSocket Channel、本地 HTTP API。
 - 独立 React Web UI：会话列表、Markdown、工具调用展示、停止、认证、有限重连和斜杠命令提示。
 
-最新开发进度记录中的完整离线 Python 测试为 **500 passed, 10 skipped**。这是截至 2026-09-10 的记录，不代表本文档变更后重新执行的结果；前端构建和测试命令见 **webui/README.md**。
+最新完整离线 Python 测试为 **521 passed, 10 skipped**；前端构建和测试命令见 **webui/README.md**。
 
 ### 暂时跳过的功能
 
@@ -528,7 +532,7 @@ HTTP API
 - HTTP 流式响应、异步任务查询、完整 OpenAI API 兼容；
 - WebSocket 多会话订阅、广播、断点续传和多媒体；
 - MCP resources、prompts、OAuth、重连、热加载与插件；
-- Provider fallback/retry、并行工具、真实 tokenizer、长期记忆冲突处理；
+- Provider fallback、Retry-After/熔断、并行工具、真实 tokenizer、长期记忆冲突处理；
 - 跨进程 Session 协调、后台任务持久化、生产级 sandbox、可观测性和可靠投递。
 
 ### 推荐扩展路径

@@ -95,6 +95,7 @@ class AgentRunResult:
     tools_used: tuple[ToolCallRequest, ...]
     token_usage: TokenUsage | None
     stop_reason: str | None
+    error: str | None = None
 
 
 class AgentRunner:
@@ -145,6 +146,20 @@ class AgentRunner:
                 else spec.provider.complete(conversation, tools=tools or None)
             )
             token_usage = _combine_token_usage(token_usage, response.usage)
+            if response.error is not None:
+                # Provider failures deliberately do not become assistant or
+                # tool messages: AgentLoop can then leave the Session intact.
+                logger.warning(
+                    "Agent run stopped because the provider returned an error"
+                )
+                return AgentRunResult(
+                    content=None,
+                    messages=tuple(conversation),
+                    tools_used=tuple(tools_used),
+                    token_usage=token_usage,
+                    stop_reason="error",
+                    error=response.error,
+                )
             if not response.tool_calls:
                 conversation.append(AIMessage(content=response.content or ""))
                 injected_messages = await _take_injected_messages(spec)

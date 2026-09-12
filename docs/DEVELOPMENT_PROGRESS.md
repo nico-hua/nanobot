@@ -124,8 +124,9 @@
 
 ### 2026-09-12
 
-- [x] 为 Provider 增加单次 LLM 请求超时：`provider.request_timeout_seconds` 默认 60 秒，`ProviderFactory` 将其传入 OpenAI-compatible 与 Anthropic-compatible Provider。每个 `complete()` 或 `stream()` 调用独立计时；stream 的边界包含建立流、读取增量与获得最终响应，但不覆盖 AgentRunner 的工具循环或后续模型轮次。
-- [x] 新增 `ProviderTimeoutError`（`ProviderError` 子类）作为统一超时错误，保留既有 Provider 异常契约，不将错误伪装为成功的 `LLMResponse`；外部 `asyncio.CancelledError` 原样传播。补充正常、非流式超时、流式超时、取消与 Factory 配置传递测试；最新完整离线测试为 `506 passed, 10 skipped`。
+- [x] 为 Provider 增加单次 LLM 请求超时：`provider.request_timeout_seconds` 默认 60 秒，`ProviderFactory` 将其传入 OpenAI-compatible 与 Anthropic-compatible Provider。每次 `complete()` 或 `stream()` 尝试独立计时；stream 的边界包含建立流、读取增量与获得最终响应，但不覆盖 AgentRunner 的工具循环或后续模型轮次。
+- [x] 建立统一 Provider 错误与有限重试边界：`LLMResponse` 新增 `error`，最终 Provider 失败统一返回 `finish_reason="error"` 的安全结果，而非将普通异常交给 Runner；`asyncio.CancelledError` 原样传播。`provider.max_retries` 默认 `2`，表示一次请求最多总计 3 次尝试，间隔为 1、2 秒；仅重试 timeout、连接错误、HTTP 429/5xx 和显式 `ProviderTransientError`，并关闭 SDK 自带重试，避免重试次数叠加。
+- [x] 流式响应仅在尚未对外发布 delta 时重试；已有可见 delta、回调失败或客户端输出失败均不重放。`AgentRunner` 收到 `LLMResponse.error` 后不执行工具或追加消息；`AgentLoop` 仅返回一个错误结果（WebSocket 为 `event="error"`），不保存当前 Session、不触发记忆、压缩、Goal continuation 或 max-iteration continuation。补充 Provider、Runner、Loop、WebSocket 和配置测试；最新完整离线测试为 `521 passed, 10 skipped`。
 
 ## 待开发功能
 
@@ -152,8 +153,8 @@
 ## 待优化项
 
 - `ToolParameter` 目前只支持 string、integer、number、boolean；数组、嵌套对象、枚举、默认值和完整 JSON Schema 校验尚未具备。
-- `AgentRunner` 已支持文本流式、顺序工具循环和工具调用进度事件；仍缺并行工具调度、retry、fallback、上下文注入、工具结果与 reasoning 流式事件。
-- Provider 的超时、重试、代理、模型能力声明、可选 SDK 依赖和成本控制仍需统一。
+- `AgentRunner` 已支持文本流式、顺序工具循环和工具调用进度事件；仍缺并行工具调度、Provider fallback、工具结果与 reasoning 流式事件。
+- Provider 已有单次请求超时和有限 transient retry；代理、模型能力声明、可选 SDK 依赖、Retry-After、熔断、fallback、总 deadline 和成本控制仍需统一。
 - Session JSONL 尚无跨进程锁、损坏恢复、迁移、TTL 或缓存淘汰；摘要、记忆仍缺少多级压缩、自动重试、冲突解决和后台任务恢复。
 - Cron 缺少 cron 表达式、编辑/启停、限长批处理、事件归档、可靠投递、重试及分布式调度。
 - Subagent 后台任务尚无持久化、进程重启恢复、自动重试、结果在原始 tool call 中实时注入、LLM 可调用的任务管理工具或多 Agent 协作。
